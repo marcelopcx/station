@@ -1,5 +1,24 @@
+# Controller FastAPI en :8090. S1 no necesita GPU.
 services:
   game-station:
     build: .
+    image: airtek/game-station:s1
+    environment:
+      STATION_ID: ${STATION_ID:-spark-1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
     ports:
       - "8090:8090"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 8s

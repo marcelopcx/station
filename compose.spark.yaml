@@ -1,0 +1,43 @@
+# Estación + cliente S1 en el Spark. Host network: ICE/UDP usa las NICs reales.
+# game-client tiene que estar al lado: ../game-client
+#
+#   docker compose -f compose.spark.yaml up --build
+services:
+  game-station:
+    build: .
+    image: airtek/game-station:s1
+    network_mode: host
+    environment:
+      STATION_ID: ${STATION_ID:-spark-1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 8s
+
+  game-client:
+    build:
+      context: ../game-client
+      args:
+        VITE_STATION_URL: /station
+    image: airtek/game-client:s1
+    network_mode: host
+    environment:
+      STATION_UPSTREAM: http://127.0.0.1:8090
+      NGINX_ENVSUBST_FILTER: STATION_UPSTREAM
+    depends_on:
+      game-station:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+
