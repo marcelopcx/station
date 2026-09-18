@@ -1,8 +1,8 @@
 """Bodies JSON del REST.
 
 Los nombres de campo son camelCase: coinciden con el JSON del wire.
-`Station.prepare` solo usa `sessionId` y `gameId`; `version` y `source`
-se validan aquí y no se leen en la máquina de estados.
+S4 lee `version` y `source` (copia local + checksum). `azure-sas` se
+valida en el body y se rechaza en prepare con UNSUPPORTED_SOURCE.
 """
 
 from typing import Literal, Optional

@@ -1,4 +1,4 @@
-# Game Station — primer corte, fase S1
+# Game Station — primer corte, fase S5
 
 Proceso del contenedor **GAME STATION**. Hoy (S1): FSM de sesión y un
 `RTCPeerConnection` que publica barras SMPTE. No es el MVP (S2+S3: juego +
@@ -26,8 +26,8 @@ station/controller/
 | Siguiente fase | Cambio en `game-station/` |
 | --- | --- |
 | **S2+S3** | Parsear DC `input` (pad); `runtime.py` + captura; uinput. Guía: [`../docs/guia-s2-s3-juego-e-input.md`](../docs/guia-s2-s3-juego-e-input.md) |
-| S4 | `prepare` deja de ser un sleep: `/library` → `/cache` |
-| S5 | encoder en `/health`, timeout de inactividad |
+| **S4** | `prepare` copia `/library` → `/cache` + checksum |
+| **S5** | encoder en `/health`, timeout de inactividad, logs |
 | G1 | nada aquí: Spring es **cliente** de `:8090` |
 
 ## Layout S1

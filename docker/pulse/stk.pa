@@ -1,0 +1,5 @@
+# Pulse en user-mode (no --system). STK y parec/ffmpeg hablan con stk.monitor.
+load-module module-null-sink sink_name=stk sink_properties=device.description=STK
+load-module module-native-protocol-unix auth-anonymous=1 auth-cookie-enabled=0 socket=/tmp/pulse/native
+set-default-sink stk
+set-default-source stk.monitor

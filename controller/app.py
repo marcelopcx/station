@@ -4,7 +4,7 @@ Los handlers delegan en `Station`. `create_app(station=...)` permite
 inyectar un doble y no abrir FFmpeg en tests.
 
     GET  /health       snapshot de estado (sin `progress`)
-    POST /prepare      202; trabajo en background
+    POST /prepare      202; copia /library → /cache (S4)
     POST /launch       200 + `wsUrl`; arranca la fuente de video
     POST /stop         204; cierra peer y fuente; vuelve a IDLE
     WS   /ws/control   eventos STATE; el inbound se ignora
@@ -44,10 +44,18 @@ def cors_origins() -> list[str]:
 
 
 def create_station() -> Station:
+    cache = os.environ.get("CACHE_ROOT", "/cache")
+    library = os.environ.get("LIBRARY_ROOT", "/opt/station-library")
+    try:
+        os.makedirs(cache, exist_ok=True)
+    except OSError:
+        pass
     return Station(
         hub=Hub(),
         stream=WebrtcSession(),
         station_id=os.environ.get("STATION_ID", "spark-1"),
+        library_root=library,
+        cache_root=cache,
     )
 
 
@@ -60,14 +68,16 @@ def create_app(station: Station | None = None) -> FastAPI:
         gs.setLevel(logging.INFO)
         if not any(isinstance(h, logging.StreamHandler) for h in gs.handlers):
             handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+            handler.setFormatter(
+                logging.Formatter("%(levelname)s %(name)s %(message)s")
+            )
             gs.addHandler(handler)
         configure_ice_hosts()
         log.info("game-station ready id=%s", station.station_id)
         yield
         await station.stop()
 
-    app = FastAPI(title="Airtek Game Station", version="s2", lifespan=lifespan)
+    app = FastAPI(title="Airtek Game Station", version="s5", lifespan=lifespan)
     app.state.station = station
     app.add_exception_handler(HTTPException, http_exception_handler)
 
@@ -90,7 +100,9 @@ def create_app(station: Station | None = None) -> FastAPI:
     @app.post("/prepare", status_code=202)
     async def prepare(body: PrepareRequest):
         try:
-            return await station.prepare(body.sessionId, body.gameId)
+            return await station.prepare(
+                body.sessionId, body.gameId, body.version, body.source
+            )
         except StationError as exc:
             raise to_http_exception(exc) from exc
 

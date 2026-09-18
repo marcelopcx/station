@@ -88,6 +88,12 @@ class WebrtcSession:
     def playing_source(self) -> bool:
         return self._source.is_running()
 
+    def encoder_name(self) -> Optional[str]:
+        return "vp8" if self.playing_source() else None
+
+    def last_input_monotonic(self) -> Optional[float]:
+        return self._input.last_input_monotonic
+
     async def start_source(self, game_id: str) -> None:
         self._source.stop()
         log.info("start_source game=%s encoder=vp8,opus", game_id)
@@ -123,8 +129,7 @@ class WebrtcSession:
 
     async def _try_take_peer(self, ws: WebSocket) -> Optional[RTCPeerConnection]:
         async with self._lock:
-            track = self._source.subscribe_video()
-            if track is None:
+            if not self._source.is_running():
                 await ws.send_text(dumps_error(ERROR_NOT_PLAYING))
                 await ws.close()
                 return None
@@ -133,15 +138,6 @@ class WebrtcSession:
                 await ws.close()
                 return None
             pc = RTCPeerConnection(configuration=rtc_configuration())
-            pc.addTrack(track)
-            audio = self._source.subscribe_audio()
-            if audio is not None:
-                pc.addTrack(audio)
-                log.info("webrtc audio track=opus")
-            else:
-                log.info("webrtc audio track=none")
-            _prefer_vp8(pc)
-            _prefer_opus(pc)
             self._pc = pc
             self._ws = ws
             return pc
@@ -195,6 +191,7 @@ class WebrtcSession:
             await pc.setRemoteDescription(
                 RTCSessionDescription(sdp=parsed.sdp, type="offer")
             )
+            self._attach_tracks(pc)
             answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             await ws.send_text(dumps_answer(pc.localDescription.sdp))
@@ -207,6 +204,19 @@ class WebrtcSession:
                 await pc.addIceCandidate(cand)
             except Exception:
                 log.warning("ICE candidate rejected")
+
+    def _attach_tracks(self, pc: RTCPeerConnection) -> None:
+        video = self._source.subscribe_video()
+        if video is not None:
+            pc.addTrack(video)
+        audio = self._source.subscribe_audio()
+        if audio is not None:
+            pc.addTrack(audio)
+            log.info("webrtc audio track=opus encoder=vp8,opus")
+        else:
+            log.info("webrtc audio track=none encoder=vp8")
+        _prefer_vp8(pc)
+        _prefer_opus(pc)
 
     async def _release_peer(self, pc: RTCPeerConnection) -> None:
         async with self._lock:

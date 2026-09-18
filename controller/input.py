@@ -103,8 +103,10 @@ class InputSink:
         self._abs: dict[int, int] = {}
         self._hat_x = 0
         self._hat_y = 0
+        self.last_input_monotonic: Optional[float] = None
 
     def open(self) -> None:
+        self.last_input_monotonic = None
         if self._ui is not None:
             return
         maps = _pad_maps()
@@ -152,6 +154,7 @@ class InputSink:
             log.warning("input_backend=log (/dev/uinput no disponible)")
 
     def close(self) -> None:
+        self.last_input_monotonic = None
         ui = self._ui
         self._ui = None
         if ui is not None:
@@ -162,6 +165,7 @@ class InputSink:
         if ev is None:
             log.warning("input: paquete inválido len=%s", len(data))
             return
+        self.last_input_monotonic = time.monotonic()
         if ev.is_pad_button:
             log.info("input pad %s code=%s", "down" if ev.pressed else "up", ev.code)
             self._button(ev.code, 1 if ev.pressed else 0)

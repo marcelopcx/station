@@ -22,12 +22,15 @@ services:
       STATION_DISPLAY: ":99"
       STATION_SIZE: "1280x720"
       STK_BIN: /opt/stk/run_game.sh
+      LIBRARY_ROOT: /opt/station-library
+      CACHE_ROOT: /cache
+      IDLE_TIMEOUT_S: ${IDLE_TIMEOUT_S:-300}
     devices:
       - /dev/dri
       - /dev/uinput
     volumes:
-      # uinput crea el event* en el host; STK/SDL lo lee desde aquí.
       - /dev/input:/dev/input
+      - station-cache:/cache
     device_cgroup_rules:
       - "c 13:* rmw"
     init: true
@@ -63,5 +66,8 @@ services:
         condition: service_healthy
     init: true
     restart: unless-stopped
+
+volumes:
+  station-cache:
 
 
