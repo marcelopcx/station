@@ -37,7 +37,15 @@ RUN chmod +x /tmp/install-stk.sh \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
+# evdev compila el C extension: hace falta gcc + linux/input.h (no el header del kernel host).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        python3-dev \
+        linux-libc-dev \
+    && pip3 install --no-cache-dir --break-system-packages -r requirements.txt \
+    && apt-get purge -y gcc python3-dev \
+    && apt-get autoremove -y --purge \
+    && rm -rf /var/lib/apt/lists/*
 COPY controller ./controller
 ENV PYTHONUNBUFFERED=1
 ENV STATION_DISPLAY=:99
