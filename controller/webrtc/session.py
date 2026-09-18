@@ -1,13 +1,13 @@
 """Un `RTCPeerConnection` y una fuente de video.
 
-- `start_source` / `stop`: ciclo de vida de la fuente.
+- `start_source` / `stop`: ciclo de vida de runtime + pad + fuente.
 - `attach`: un peer a la vez; loop OFFER → setRemote + createAnswer; ICE trickle.
 
 Sin fuente: `NOT_PLAYING`. Si `_pc` ya existe: `PEER_BUSY`.
 No lee `StationState`.
 
 `_prefer_vp8` fija `setCodecPreferences` a `video/VP8` (libvpx en aiortc).
-El DataChannel `input` se acepta en `ondatachannel` y no se lee.
+El DataChannel `input` se acepta en `ondatachannel` y se parsea (`type=3` → uinput).
 """
 
 from __future__ import annotations
@@ -20,12 +20,14 @@ from typing import Optional
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCRtpSender, RTCSessionDescription
 from fastapi import WebSocket, WebSocketDisconnect
 
+from controller.input import InputSink
+from controller.runtime import GameRuntime
 from controller.webrtc.ice import (
     candidate_from_message,
     candidate_to_message,
     rtc_configuration,
 )
-from controller.webrtc.media import SmpteBarsSource
+from controller.webrtc.media import VideoSource, make_source
 from controller.webrtc.signaling import (
     ERROR_NOT_PLAYING,
     ERROR_PEER_BUSY,
@@ -56,16 +58,28 @@ def _prefer_vp8(pc: RTCPeerConnection) -> None:
 
 
 class WebrtcSession:
-    def __init__(self, source: Optional[SmpteBarsSource] = None) -> None:
+    def __init__(
+        self,
+        source: Optional[VideoSource] = None,
+        runtime: Optional[GameRuntime] = None,
+        input_sink: Optional[InputSink] = None,
+    ) -> None:
         self._lock = asyncio.Lock()
-        self._source = source or SmpteBarsSource()
+        self._source: VideoSource = source or make_source("test-pattern", ":99")
+        self._runtime = runtime or GameRuntime()
+        self._input = input_sink or InputSink()
         self._pc: Optional[RTCPeerConnection] = None
         self._ws: Optional[WebSocket] = None
 
     def playing_source(self) -> bool:
         return self._source.is_running()
 
-    def start_source(self) -> None:
+    async def start_source(self, game_id: str) -> None:
+        self._source.stop()
+        log.info("start_source game=%s encoder=vp8", game_id)
+        self._input.open()
+        await self._runtime.start(game_id)
+        self._source = make_source(game_id, self._runtime.display)
         self._source.start()
 
     async def stop(self) -> None:
@@ -77,6 +91,8 @@ class WebrtcSession:
         if pc:
             await pc.close()
         self._source.stop()
+        await self._runtime.stop()
+        self._input.close()
         if ws:
             try:
                 await ws.close()
@@ -117,6 +133,14 @@ class WebrtcSession:
         @pc.on("datachannel")
         def on_datachannel(channel) -> None:
             log.info("datachannel=%s", channel.label)
+            if channel.label != "input":
+                return
+
+            @channel.on("message")
+            def on_message(message) -> None:
+                if not isinstance(message, (bytes, bytearray, memoryview)):
+                    return
+                self._input.handle(bytes(message))
 
         @pc.on("icecandidate")
         async def on_icecandidate(candidate: Optional[RTCIceCandidate]) -> None:

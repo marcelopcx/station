@@ -11,7 +11,8 @@ No construye SDP ni ICE: el video se delega en un `MediaSession`.
 No hay I/O de filesystem. `version` y `source` del request no se leen aquí.
 
 `launch`: solo desde `READY`. Pasa a `PLAYING` y después llama
-`start_source()` para que el REST 200 ya permita abrir `/ws/webrtc`.
+`await start_source(game_id)` para que el REST 200 ya permita abrir `/ws/webrtc`.
+Si la fuente falla, `stop()` vuelve a `IDLE`.
 
 `stop`: cierra el peer y la fuente, cancela un prepare en vuelo, vuelve a
 `IDLE`. El proceso uvicorn no termina.
@@ -36,11 +37,11 @@ log = logging.getLogger("game-station.machine")
 class MediaSession(Protocol):
     """Fuente + peer que consume `Station`.
 
-    `start_source` es síncrono: `MediaPlayer` abre lavfi en el caller.
+    `start_source` arranca display/juego/captura (puede await).
     `stop` / `attach` pueden await (`pc.close()`, loop de signaling).
     """
 
-    def start_source(self) -> None: ...
+    async def start_source(self, game_id: str) -> None: ...
 
     async def stop(self) -> None: ...
 
@@ -152,7 +153,12 @@ class Station:
             self.game_id = game_id
         log.info("state=%s", self.state)
         await self._hub.broadcast(self._event(StationState.PLAYING, 100, "En partida"))
-        self._stream.start_source()
+        try:
+            await self._stream.start_source(game_id)
+        except Exception:
+            log.exception("start_source failed game=%s", game_id)
+            await self.stop()
+            raise
         return {"state": StationState.PLAYING.value, "wsUrl": "/ws/webrtc"}
 
     async def stop(self) -> None:

@@ -4,7 +4,7 @@ from controller.errors import GameNotReady, PrepareInProgress, StationBusy
 from controller.hub import Hub
 from controller.machine import Station
 from controller.states import StationState
-from tests.fakes import FakeStream
+from tests.fakes import BoomStream, FakeStream
 
 
 class FakeWs:
@@ -39,6 +39,7 @@ class StationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["state"], "PLAYING")
         self.assertEqual(result["wsUrl"], "/ws/webrtc")
         self.assertTrue(self.stream.started)
+        self.assertEqual(self.stream.game_id, "g1")
 
         with self.assertRaises(StationBusy):
             await self.station.launch("s1", "g1")
@@ -64,6 +65,18 @@ class StationTests(unittest.IsolatedAsyncioTestCase):
         await self.station.attach_webrtc(ws)
         self.assertTrue(ws.closed)
         self.assertEqual(ws.sent, ['{"type": "ERROR", "code": "NOT_PLAYING"}'])
+
+    async def test_launch_rolls_back_when_source_fails(self) -> None:
+        stream = BoomStream()
+        station = Station(Hub(), stream, prepare_step_s=0)
+        await station.prepare("s1", "g1")
+        assert station._prepare_task is not None
+        await station._prepare_task
+        with self.assertRaises(RuntimeError):
+            await station.launch("s1", "g1")
+        self.assertEqual(station.state, StationState.IDLE)
+        self.assertEqual(stream.stop_count, 1)
+        self.assertFalse(stream.started)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Estación + cliente S1 en el Spark. Host network: ICE/UDP usa las NICs reales.
+# Estación + cliente S2+S3 en el Spark. Host network: ICE/UDP usa las NICs reales.
 # game-client tiene que estar al lado: ../game-client
 #
 #   ICE_HOST_IPS=156.255.130.66 PUBLIC_HOST=156.255.130.66 \
@@ -6,8 +6,9 @@
 services:
   game-station:
     build: .
-    image: airtek/game-station:s1
+    image: airtek/game-station:s2
     network_mode: host
+    runtime: nvidia
     environment:
       STATION_ID: ${STATION_ID:-spark-1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,https://localhost}
@@ -16,6 +17,14 @@ services:
       ICE_HOST_POLICY: ${ICE_HOST_POLICY:-public}
       ICE_HOST_IPS: ${ICE_HOST_IPS:-}
       ICE_SERVERS: ${ICE_SERVERS:-stun:stun.l.google.com:19302}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+      STATION_DISPLAY: ":99"
+      STATION_SIZE: "1280x720"
+      STK_BIN: /opt/stk/run_game.sh
+    devices:
+      - /dev/dri
+      - /dev/uinput
     init: true
     restart: unless-stopped
     healthcheck:
@@ -37,7 +46,8 @@ services:
       args:
         VITE_STATION_URL: /station
         VITE_ICE_SERVERS: stun:stun.l.google.com:19302
-    image: airtek/game-client:s1
+        VITE_GAME_ID: supertuxkart
+    image: airtek/game-client:s2
     network_mode: host
     environment:
       STATION_UPSTREAM: http://127.0.0.1:8090
@@ -48,4 +58,5 @@ services:
         condition: service_healthy
     init: true
     restart: unless-stopped
+
 

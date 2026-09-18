@@ -1,8 +1,8 @@
-# Controller FastAPI en :8090. S1 no necesita GPU.
+# Controller FastAPI en :8090. En el Mac: gameId=test-pattern (sin GPU).
 services:
   game-station:
     build: .
-    image: airtek/game-station:s1
+    image: airtek/game-station:s2
     environment:
       STATION_ID: ${STATION_ID:-spark-1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}

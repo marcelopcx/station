@@ -56,13 +56,18 @@ def create_app(station: Station | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        logging.getLogger("game-station").setLevel(logging.INFO)
+        gs = logging.getLogger("game-station")
+        gs.setLevel(logging.INFO)
+        if not any(isinstance(h, logging.StreamHandler) for h in gs.handlers):
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+            gs.addHandler(handler)
         configure_ice_hosts()
         log.info("game-station ready id=%s", station.station_id)
         yield
         await station.stop()
 
-    app = FastAPI(title="Airtek Game Station", version="s1", lifespan=lifespan)
+    app = FastAPI(title="Airtek Game Station", version="s2", lifespan=lifespan)
     app.state.station = station
     app.add_exception_handler(HTTPException, http_exception_handler)
 
