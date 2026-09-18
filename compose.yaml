@@ -1,5 +1,5 @@
 services:
   game-station:
-    build: ./station
+    build: .
     ports:
       - "8090:8090"
