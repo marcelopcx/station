@@ -10,6 +10,9 @@ services:
     environment:
       STATION_ID: ${STATION_ID:-spark-1}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX:-https?://.*}
+      ICE_INCLUDE_LOOPBACK: "0"
+      ICE_SERVERS: ${ICE_SERVERS:-stun:stun.l.google.com:19302}
     init: true
     restart: unless-stopped
     healthcheck:
@@ -30,6 +33,7 @@ services:
       context: ../game-client
       args:
         VITE_STATION_URL: /station
+        VITE_ICE_SERVERS: stun:stun.l.google.com:19302
     image: airtek/game-client:s1
     network_mode: host
     environment:

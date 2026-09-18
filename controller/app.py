@@ -57,7 +57,8 @@ def create_app(station: Station | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         logging.getLogger("game-station").setLevel(logging.INFO)
-        enable_loopback_hosts()
+        if os.environ.get("ICE_INCLUDE_LOOPBACK", "1").lower() not in ("0", "false", "no"):
+            enable_loopback_hosts()
         log.info("game-station ready id=%s", station.station_id)
         yield
         await station.stop()
@@ -67,10 +68,12 @@ def create_app(station: Station | None = None) -> FastAPI:
     app.add_exception_handler(HTTPException, http_exception_handler)
 
     origins = cors_origins()
-    log.info("cors origins=%s", origins)
+    origin_regex = os.environ.get("CORS_ORIGIN_REGEX", "").strip() or None
+    log.info("cors origins=%s regex=%s", origins, origin_regex)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
+        allow_origin_regex=origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

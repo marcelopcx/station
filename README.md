@@ -84,8 +84,33 @@ S1 no usa NVENC: no hace falta `--gpus`.
 ## Spark (S1)
 
 La estación y el cliente viven en contenedores con **host network** para que
-ICE publique las IPs de la LAN. El RTP de WebRTC es UDP y no pasa por el
-túnel SSH ni por `-p 8090:8090`.
+ICE publique las IPs de la LAN. El RTP de WebRTC es **UDP**: no viaja por el
+túnel SSH. Por eso `localhost:5173` por `-L` puede mostrar `ontrack` y luego
+`ice failed`.
+
+### LAN (sin túnel)
+
+Laptop y Spark en la **misma Wi‑Fi/Ethernet**. En el Spark:
+
+```bash
+ip -4 addr
+# usá la IP privada (192.168.x.x / 10.x.x.x), no una pública tipo 156.x
+
+sudo ufw allow 5173/tcp
+sudo ufw allow 8090/tcp
+sudo ufw allow proto udp from 192.168.0.0/16
+sudo ufw allow proto udp from 10.0.0.0/8
+```
+
+Rebuild y abrí **en el browser** `http://<IP-LAN>:5173` (cerrá el `-L`).
+
+Chrome bloquea WebRTC en `http://IP`. En Chrome:
+
+1. `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+2. Agregá `http://<IP-LAN>:5173`
+3. Relaunch
+
+Firefox suele dejar el `RTCPeerConnection` en HTTP de LAN.
 
 En el Spark, con `game-station/` y `game-client/` como carpetas hermanas:
 
@@ -95,22 +120,13 @@ docker compose -f compose.spark.yaml up --build
 curl -s http://127.0.0.1:8090/health
 ```
 
-Desde la laptop, Chrome tiene que abrir **localhost** (HTTP en la IP LAN
-bloquea WebRTC):
-
-```bash
-ssh -L 5173:127.0.0.1:5173 usuario@spark
-```
-
-Luego `http://localhost:5173`. El front habla con la estación por
-`/station` (nginx en el mismo host). Laptop y Spark tienen que estar en la
-misma LAN para que el UDP del peer llegue.
-
 Variables:
 
 ```
 STATION_ID=spark-1
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+CORS_ORIGIN_REGEX=https?://.*
+ICE_INCLUDE_LOOPBACK=0
+ICE_SERVERS=stun:stun.l.google.com:19302
 ```
 
 ## Tests

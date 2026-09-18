@@ -23,7 +23,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from controller.webrtc.ice import (
     candidate_from_message,
     candidate_to_message,
-    enable_loopback_hosts,
+    rtc_configuration,
 )
 from controller.webrtc.media import SmpteBarsSource
 from controller.webrtc.signaling import (
@@ -103,7 +103,7 @@ class WebrtcSession:
                 await ws.send_text(dumps_error(ERROR_PEER_BUSY))
                 await ws.close()
                 return None
-            pc = RTCPeerConnection()
+            pc = RTCPeerConnection(configuration=rtc_configuration())
             pc.addTrack(track)
             _prefer_vp8(pc)
             self._pc = pc

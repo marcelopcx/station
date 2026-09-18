@@ -1,11 +1,12 @@
 """Candidatos ICE.
 
-`RTCPeerConnection()` se crea sin `iceServers`: solo `typ host`.
+`RTCPeerConnection` usa `ICE_SERVERS` (STUN, separados por coma). Vacío =
+solo `typ host`.
 
 aioice (`get_host_addresses`) enumera NICs reales y omite loopback.
-Sin `127.0.0.1`, un browser en `http://localhost` no alcanza el peer
-(`iceConnectionState=failed` con signaling OK). `enable_loopback_hosts`
-antepone `127.0.0.1` / `::1`. Idempotente.
+`enable_loopback_hosts` antepone `127.0.0.1` / `::1` para demos en
+localhost. En el Spark (LAN) no lo actives: el browser remoto no puede
+usar el loopback de la estación.
 
 Chrome publica mDNS (`*.local`) en vez de la IP. Este proceso no resuelve
 `.local`; esas líneas se descartan. El SDP del OFFER ya trae host candidates.
@@ -13,10 +14,11 @@ Chrome publica mDNS (`*.local`) en vez de la IP. Este proceso no resuelve
 
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 import aioice.ice
-from aiortc import RTCIceCandidate
+from aiortc import RTCConfiguration, RTCIceCandidate, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 
 _original_host_addresses = aioice.ice.get_host_addresses
@@ -39,6 +41,16 @@ def enable_loopback_hosts() -> None:
         return
     aioice.ice.get_host_addresses = _host_addresses_with_loopback
     _loopback_patched = True
+
+
+def rtc_configuration() -> RTCConfiguration:
+    servers: list[RTCIceServer] = []
+    raw = os.environ.get("ICE_SERVERS", "")
+    for url in raw.split(","):
+        url = url.strip()
+        if url:
+            servers.append(RTCIceServer(urls=url))
+    return RTCConfiguration(iceServers=servers)
 
 
 def candidate_from_message(msg: dict[str, Any]) -> Optional[RTCIceCandidate]:
