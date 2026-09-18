@@ -57,7 +57,6 @@ def _prefer_vp8(pc: RTCPeerConnection) -> None:
 
 class WebrtcSession:
     def __init__(self, source: Optional[SmpteBarsSource] = None) -> None:
-        enable_loopback_hosts()
         self._lock = asyncio.Lock()
         self._source = source or SmpteBarsSource()
         self._pc: Optional[RTCPeerConnection] = None
