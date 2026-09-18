@@ -45,7 +45,6 @@ def argv_for(game_id: str) -> list[str] | None:
             f"--width={_WIDTH}",
             f"--height={_HEIGHT}",
             "--fullscreen",
-            "--disable-sound",
         ]
     argv = GAMES[game_id]
     return None if argv is None else list(argv)

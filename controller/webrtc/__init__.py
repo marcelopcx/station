@@ -1,6 +1,6 @@
 """WebRTC: fuente de video, signaling JSON y un `RTCPeerConnection`.
 
-    media.py        smptebars o x11grab → MediaPlayer → VideoStreamTrack
+    media.py        smptebars o x11grab+pulse → tracks VP8/Opus
     signaling.py    OFFER / ANSWER / ICE / ERROR
     ice.py          RTCIceCandidate ↔ JSON; loopback en aioice
     session.py      un peer; junta las tres + DataChannel input

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import signal
 
 from controller.games import SIZE, argv_for
@@ -12,6 +13,8 @@ from controller.games import SIZE, argv_for
 log = logging.getLogger("game-station.runtime")
 
 DISPLAY = os.environ.get("STATION_DISPLAY", ":99")
+PULSE_SOCK = os.environ.get("STATION_PULSE_SOCK", "/tmp/pulse/native")
+PULSE_SINK = os.environ.get("STATION_PULSE_SINK", "stk")
 
 # GUID USB Xbox 360 (045e:028e, version 0x0110) = el pad virtual de input.py.
 _SDL_PAD = (
@@ -34,6 +37,10 @@ class GameRuntime:
             log.info("runtime skip display game=%s", game_id)
             return
         await self._start_display()
+        has_pulse = await self._start_pulse()
+        if game_id == "supertuxkart" and not has_pulse:
+            argv = list(argv) + ["--disable-sound"]
+            log.warning("pulse failed; STK --disable-sound")
         await self._exec(argv, name=game_id)
 
     async def stop(self) -> None:
@@ -74,15 +81,63 @@ class GameRuntime:
         )
         await asyncio.sleep(0.4)
 
+    async def _start_pulse(self) -> bool:
+        if shutil.which("pulseaudio") is None:
+            log.warning("pulseaudio no está en PATH")
+            return False
+        os.makedirs("/tmp/pulse", exist_ok=True)
+        try:
+            os.chmod("/tmp/pulse", 0o777)
+        except OSError:
+            pass
+        try:
+            await self._exec(
+                [
+                    "pulseaudio",
+                    "--system",
+                    "--disallow-exit",
+                    "--exit-idle-time=-1",
+                    "--use-pid-file=false",
+                    "--log-target=stderr",
+                    "--daemonize=no",
+                ],
+                name="pulse",
+            )
+        except FileNotFoundError:
+            return False
+        await asyncio.sleep(0.4)
+        pulse_proc = self._procs[-1] if self._procs else None
+        if pulse_proc is not None and pulse_proc.returncode is not None:
+            log.warning("pulse exited %s", pulse_proc.returncode)
+            return False
+        for _ in range(25):
+            if os.path.exists(PULSE_SOCK):
+                try:
+                    os.chmod(PULSE_SOCK, 0o777)
+                except OSError:
+                    pass
+                os.environ["PULSE_SERVER"] = f"unix:{PULSE_SOCK}"
+                os.environ["PULSE_SINK"] = PULSE_SINK
+                log.info("pulse ready sink=%s sock=%s", PULSE_SINK, PULSE_SOCK)
+                return True
+            await asyncio.sleep(0.2)
+        log.warning("pulse socket no apareció (%s)", PULSE_SOCK)
+        return False
+
     async def _exec(self, argv: list[str], name: str) -> None:
         env = os.environ.copy()
         env["DISPLAY"] = self.display
         env.setdefault("NVIDIA_DRIVER_CAPABILITIES", "all")
+        if os.path.exists(PULSE_SOCK):
+            env.setdefault("PULSE_SERVER", f"unix:{PULSE_SOCK}")
+            env.setdefault("PULSE_SINK", PULSE_SINK)
         if name == "supertuxkart":
             home = os.environ.get("HOME", "/root")
             env.setdefault("HOME", home)
             env.setdefault("XDG_CONFIG_HOME", os.path.join(home, ".config"))
             env["SDL_VIDEODRIVER"] = "x11"
+            env["SDL_AUDIODRIVER"] = "pulse"
+            env["ALSOFT_DRIVERS"] = "pulse"
             env["SDL_GAMECONTROLLERCONFIG"] = _SDL_PAD
         log.info("exec %s cmd=%s display=%s", name, argv, self.display)
         try:

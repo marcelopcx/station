@@ -1,4 +1,4 @@
-"""Un `RTCPeerConnection` y una fuente de video.
+"""Un `RTCPeerConnection` y una fuente de video/audio.
 
 - `start_source` / `stop`: ciclo de vida de runtime + pad + fuente.
 - `attach`: un peer a la vez; loop OFFER → setRemote + createAnswer; ICE trickle.
@@ -6,7 +6,7 @@
 Sin fuente: `NOT_PLAYING`. Si `_pc` ya existe: `PEER_BUSY`.
 No lee `StationState`.
 
-`_prefer_vp8` fija `setCodecPreferences` a `video/VP8` (libvpx en aiortc).
+`_prefer_vp8` / `_prefer_opus` fijan codecs en el sender (libvpx / opus).
 El DataChannel `input` se acepta en `ondatachannel` y se parsea (`type=3` → uinput).
 """
 
@@ -53,8 +53,22 @@ def _prefer_vp8(pc: RTCPeerConnection) -> None:
         return
     for transceiver in pc.getTransceivers():
         sender = transceiver.sender
-        if sender and sender.track:
+        if sender and sender.track and sender.track.kind == "video":
             transceiver.setCodecPreferences(vp8)
+
+
+def _prefer_opus(pc: RTCPeerConnection) -> None:
+    opus = [
+        codec
+        for codec in RTCRtpSender.getCapabilities("audio").codecs
+        if codec.mimeType.lower() == "audio/opus"
+    ]
+    if not opus:
+        return
+    for transceiver in pc.getTransceivers():
+        sender = transceiver.sender
+        if sender and sender.track and sender.track.kind == "audio":
+            transceiver.setCodecPreferences(opus)
 
 
 class WebrtcSession:
@@ -76,7 +90,7 @@ class WebrtcSession:
 
     async def start_source(self, game_id: str) -> None:
         self._source.stop()
-        log.info("start_source game=%s encoder=vp8", game_id)
+        log.info("start_source game=%s encoder=vp8,opus", game_id)
         self._input.open()
         await self._runtime.start(game_id)
         self._source = make_source(game_id, self._runtime.display)
@@ -120,7 +134,14 @@ class WebrtcSession:
                 return None
             pc = RTCPeerConnection(configuration=rtc_configuration())
             pc.addTrack(track)
+            audio = self._source.subscribe_audio()
+            if audio is not None:
+                pc.addTrack(audio)
+                log.info("webrtc audio track=opus")
+            else:
+                log.info("webrtc audio track=none")
             _prefer_vp8(pc)
+            _prefer_opus(pc)
             self._pc = pc
             self._ws = ws
             return pc
