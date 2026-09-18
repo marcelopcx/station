@@ -31,7 +31,7 @@ from controller.errors import StationError, http_exception_handler, to_http_exce
 from controller.hub import Hub
 from controller.machine import Station
 from controller.models import LaunchRequest, PrepareRequest, StopRequest
-from controller.webrtc import WebrtcSession, enable_loopback_hosts
+from controller.webrtc import WebrtcSession, configure_ice_hosts
 
 log = logging.getLogger("game-station.app")
 
@@ -57,8 +57,7 @@ def create_app(station: Station | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         logging.getLogger("game-station").setLevel(logging.INFO)
-        if os.environ.get("ICE_INCLUDE_LOOPBACK", "1").lower() not in ("0", "false", "no"):
-            enable_loopback_hosts()
+        configure_ice_hosts()
         log.info("game-station ready id=%s", station.station_id)
         yield
         await station.stop()

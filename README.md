@@ -84,41 +84,70 @@ S1 no usa NVENC: no hace falta `--gpus`.
 ## Spark (S1)
 
 La estación y el cliente viven en contenedores con **host network** para que
-ICE publique las IPs de la LAN. El RTP de WebRTC es **UDP**: no viaja por el
+ICE publique IPs reales. El RTP de WebRTC es **UDP**: no viaja por el
 túnel SSH. Por eso `localhost:5173` por `-L` puede mostrar `ontrack` y luego
 `ice failed`.
 
-### LAN (sin túnel)
+En el Spark, `game-station/` y `game-client/` son carpetas hermanas.
 
-Laptop y Spark en la **misma Wi‑Fi/Ethernet**. En el Spark:
+### Internet (redes distintas, IP pública)
+
+El Spark anuncia solo la IP pública (`ICE_HOST_POLICY=public`). Chrome
+necesita HTTPS para WebRTC: nginx escucha **443** con un cert autofirmado.
+
+En el Spark:
 
 ```bash
 ip -4 addr
-# usá la IP privada (192.168.x.x / 10.x.x.x), no una pública tipo 156.x
+# IP pública del Spark, p. ej. 156.255.130.66
 
+sudo ufw allow OpenSSH
+sudo ufw allow 443/tcp
 sudo ufw allow 5173/tcp
-sudo ufw allow 8090/tcp
+sudo ufw allow 10000:65535/udp
+sudo ufw --force enable
+sudo ufw status
+
+cd ~/airtek-cloud-game/game-station
+git pull
+cd ../game-client && git pull && cd ../game-station
+
+export ICE_HOST_IPS=156.255.130.66
+export PUBLIC_HOST=156.255.130.66
+docker compose -f compose.spark.yaml up --build -d
+docker compose -f compose.spark.yaml logs -f --tail=80
+```
+
+En los logs de `game-station` tiene que aparecer
+`ice hosts ... ipv4=['156.255.130.66']` (sin `10.212` ni `172.x`).
+
+En la laptop (cerrá el túnel `-L`):
+
+1. Abrí `https://156.255.130.66`
+2. Aceptá el certificado autofirmado (Avanzado → continuar)
+3. Play
+
+No uses `http://156.255.130.66:5173` en Chrome: no es secure context.
+
+`:5173` HTTP queda para el túnel SSH. No abras `:8090` a internet; el
+signaling va por `/station` en nginx.
+
+### LAN / VPN
+
+Misma red o VPN del Spark (`10.212.x.x`). El compose con
+`ICE_HOST_POLICY=public` **no** anuncia esa IP privada. Para LAN:
+
+```bash
+ICE_HOST_POLICY=all ICE_HOST_IPS= \
+  docker compose -f compose.spark.yaml up --build -d
+```
+
+```bash
 sudo ufw allow proto udp from 192.168.0.0/16
 sudo ufw allow proto udp from 10.0.0.0/8
 ```
 
-Rebuild y abrí **en el browser** `http://<IP-LAN>:5173` (cerrá el `-L`).
-
-Chrome bloquea WebRTC en `http://IP`. En Chrome:
-
-1. `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
-2. Agregá `http://<IP-LAN>:5173`
-3. Relaunch
-
-Firefox suele dejar el `RTCPeerConnection` en HTTP de LAN.
-
-En el Spark, con `game-station/` y `game-client/` como carpetas hermanas:
-
-```bash
-cd game-station
-docker compose -f compose.spark.yaml up --build
-curl -s http://127.0.0.1:8090/health
-```
+Chrome en `http://<IP>:5173`: `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
 
 Variables:
 
@@ -126,7 +155,10 @@ Variables:
 STATION_ID=spark-1
 CORS_ORIGIN_REGEX=https?://.*
 ICE_INCLUDE_LOOPBACK=0
+ICE_HOST_POLICY=public
+ICE_HOST_IPS=156.255.130.66
 ICE_SERVERS=stun:stun.l.google.com:19302
+PUBLIC_HOST=156.255.130.66
 ```
 
 ## Tests

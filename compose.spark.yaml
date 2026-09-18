@@ -1,7 +1,8 @@
 # Estación + cliente S1 en el Spark. Host network: ICE/UDP usa las NICs reales.
 # game-client tiene que estar al lado: ../game-client
 #
-#   docker compose -f compose.spark.yaml up --build
+#   ICE_HOST_IPS=156.255.130.66 PUBLIC_HOST=156.255.130.66 \
+#     docker compose -f compose.spark.yaml up --build
 services:
   game-station:
     build: .
@@ -9,9 +10,11 @@ services:
     network_mode: host
     environment:
       STATION_ID: ${STATION_ID:-spark-1}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,https://localhost}
       CORS_ORIGIN_REGEX: ${CORS_ORIGIN_REGEX:-https?://.*}
       ICE_INCLUDE_LOOPBACK: "0"
+      ICE_HOST_POLICY: ${ICE_HOST_POLICY:-public}
+      ICE_HOST_IPS: ${ICE_HOST_IPS:-}
       ICE_SERVERS: ${ICE_SERVERS:-stun:stun.l.google.com:19302}
     init: true
     restart: unless-stopped
@@ -39,6 +42,7 @@ services:
     environment:
       STATION_UPSTREAM: http://127.0.0.1:8090
       NGINX_ENVSUBST_FILTER: STATION_UPSTREAM
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
     depends_on:
       game-station:
         condition: service_healthy

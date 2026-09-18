@@ -6,7 +6,7 @@
     session.py      un peer; junta las tres
 """
 
-from controller.webrtc.ice import enable_loopback_hosts
+from controller.webrtc.ice import configure_ice_hosts, enable_loopback_hosts
 from controller.webrtc.session import WebrtcSession
 
-__all__ = ["WebrtcSession", "enable_loopback_hosts"]
+__all__ = ["WebrtcSession", "configure_ice_hosts", "enable_loopback_hosts"]
