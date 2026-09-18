@@ -1,9 +1,10 @@
 # Native libs for aiortc/PyAV: lavfi (ffmpeg), VP8 (libvpx), Opus, SRTP.
+# Bookworm ships libvpx7 (libvpx9 is Trixie+).
 FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         libopus0 \
-        libvpx9 \
+        libvpx7 \
         libsrtp2-1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
