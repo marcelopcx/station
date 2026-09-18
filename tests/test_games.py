@@ -25,6 +25,7 @@ class GamesTests(unittest.TestCase):
         assert argv is not None
         self.assertEqual(argv[0], "/opt/stk/run_game.sh")
         self.assertIn("--disable-sound", argv)
+        self.assertIn("--fullscreen", argv)
 
     def test_unknown_falls_back_to_smpte(self) -> None:
         self.assertIsNone(argv_for("no-such-game"))

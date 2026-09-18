@@ -47,7 +47,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get autoremove -y --purge \
     && rm -rf /var/lib/apt/lists/*
 COPY controller ./controller
+COPY stk-home/ /root/.config/supertuxkart/
 ENV PYTHONUNBUFFERED=1
+ENV HOME=/root
+ENV XDG_CONFIG_HOME=/root/.config
 ENV STATION_DISPLAY=:99
 ENV STATION_SIZE=1280x720
 ENV STK_BIN=/opt/stk/run_game.sh

@@ -13,6 +13,15 @@ log = logging.getLogger("game-station.runtime")
 
 DISPLAY = os.environ.get("STATION_DISPLAY", ":99")
 
+# GUID USB Xbox 360 (045e:028e, version 0x0110) = el pad virtual de input.py.
+_SDL_PAD = (
+    "030000005e0400008e02000010010000,Airtek Cloud Pad,"
+    "a:b0,b:b1,x:b2,y:b3,back:b6,start:b7,guide:b8,"
+    "leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,"
+    "leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,"
+    "dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,platform:Linux,\n"
+)
+
 
 class GameRuntime:
     def __init__(self, display: str = DISPLAY) -> None:
@@ -69,6 +78,12 @@ class GameRuntime:
         env = os.environ.copy()
         env["DISPLAY"] = self.display
         env.setdefault("NVIDIA_DRIVER_CAPABILITIES", "all")
+        if name == "supertuxkart":
+            home = os.environ.get("HOME", "/root")
+            env.setdefault("HOME", home)
+            env.setdefault("XDG_CONFIG_HOME", os.path.join(home, ".config"))
+            env["SDL_VIDEODRIVER"] = "x11"
+            env["SDL_GAMECONTROLLERCONFIG"] = _SDL_PAD
         log.info("exec %s cmd=%s display=%s", name, argv, self.display)
         try:
             proc = await asyncio.create_subprocess_exec(

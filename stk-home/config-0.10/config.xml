@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<stkconfig version="8" encoding="utf-8">
+    <!-- 0 = no preguntó (sale el popup), 1 = internet ok, 2 = no -->
+    <enable_internet value="2" />
+</stkconfig>

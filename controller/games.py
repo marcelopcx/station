@@ -44,6 +44,7 @@ def argv_for(game_id: str) -> list[str] | None:
             _stk_bin(),
             f"--width={_WIDTH}",
             f"--height={_HEIGHT}",
+            "--fullscreen",
             "--disable-sound",
         ]
     argv = GAMES[game_id]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import struct
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -78,10 +79,6 @@ def _pad_maps() -> tuple[dict[int, int], dict[int, int], Any, Any] | None:
         9: _e.BTN_START,
         10: _e.BTN_THUMBL,
         11: _e.BTN_THUMBR,
-        12: _e.BTN_DPAD_UP,
-        13: _e.BTN_DPAD_DOWN,
-        14: _e.BTN_DPAD_LEFT,
-        15: _e.BTN_DPAD_RIGHT,
         16: _e.BTN_MODE,
     }
     abs_map = {
@@ -104,6 +101,8 @@ class InputSink:
         self._ui: Optional[Any] = None
         self._btn: dict[int, int] = {}
         self._abs: dict[int, int] = {}
+        self._hat_x = 0
+        self._hat_y = 0
 
     def open(self) -> None:
         if self._ui is not None:
@@ -124,6 +123,14 @@ class InputSink:
                 (_e.ABS_RY, stick),
                 (_e.ABS_Z, trigger),
                 (_e.ABS_RZ, trigger),
+                (
+                    _e.ABS_HAT0X,
+                    AbsInfo(value=0, min=-1, max=1, fuzz=0, flat=0, resolution=0),
+                ),
+                (
+                    _e.ABS_HAT0Y,
+                    AbsInfo(value=0, min=-1, max=1, fuzz=0, flat=0, resolution=0),
+                ),
             ],
         }
         try:
@@ -135,7 +142,11 @@ class InputSink:
                 product=0x028E,
                 version=0x0110,
             )
-            log.info("input_backend=uinput")
+            dev = getattr(self._ui, "device", None)
+            path = getattr(dev, "path", None) if dev is not None else None
+            log.info("input_backend=uinput path=%s", path)
+            # El nodo /dev/input/event* lo crea el kernel/udev un instante después.
+            time.sleep(0.5)
         except OSError:
             self._ui = None
             log.warning("input_backend=log (/dev/uinput no disponible)")
@@ -163,10 +174,29 @@ class InputSink:
     def _button(self, code: int, value: int) -> None:
         if self._ui is None or _e is None:
             return
+        if code in (12, 13, 14, 15):
+            self._hat(code, value)
+            return
         btn = self._btn.get(code)
         if btn is None:
             return
         self._ui.write(_e.EV_KEY, btn, value)
+        self._ui.syn()
+
+    def _hat(self, code: int, value: int) -> None:
+        if self._ui is None or _e is None:
+            return
+        pressed = value != 0
+        if code == 12:
+            self._hat_y = -1 if pressed else 0
+        elif code == 13:
+            self._hat_y = 1 if pressed else 0
+        elif code == 14:
+            self._hat_x = -1 if pressed else 0
+        elif code == 15:
+            self._hat_x = 1 if pressed else 0
+        self._ui.write(_e.EV_ABS, _e.ABS_HAT0X, self._hat_x)
+        self._ui.write(_e.EV_ABS, _e.ABS_HAT0Y, self._hat_y)
         self._ui.syn()
 
     def _axis(self, code: int, extra: int) -> None:
