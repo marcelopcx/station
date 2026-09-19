@@ -97,6 +97,12 @@ class WebrtcSession:
         log.info("start_source game=%s encoder=vp8,opus", game_id)
         manifest = self._runtime.manifest_for(game_id)
         needs = manifest.needs
+        log.info(
+            "input needs pads=%s keyboard=%s mouse=%s",
+            needs.gamepad,
+            needs.keyboard,
+            needs.mouse,
+        )
         self._input.open(
             pads=needs.gamepad,
             keyboard=needs.keyboard,

@@ -93,7 +93,16 @@ class GameCatalog:
         if not isinstance(raw, dict):
             raise ValueError(f"manifest inválido: {path}")
         manifest = GameManifest.model_validate(raw)
-        log.info("catalog game=%s version=%s kind=%s path=%s", manifest.id, manifest.version, manifest.kind, path)
+        log.info(
+            "catalog game=%s version=%s kind=%s pads=%s keyboard=%s mouse=%s path=%s",
+            manifest.id,
+            manifest.version,
+            manifest.kind,
+            manifest.needs.gamepad,
+            manifest.needs.keyboard,
+            manifest.needs.mouse,
+            path,
+        )
         return cls(manifest)
 
 
