@@ -95,11 +95,21 @@ class WebrtcSession:
     async def start_source(self, game_id: str) -> None:
         self._source.stop()
         log.info("start_source game=%s encoder=vp8,opus", game_id)
-        self._input.open()
+        manifest = self._runtime.manifest_for(game_id)
+        needs = manifest.needs
+        self._input.open(
+            pads=needs.gamepad,
+            keyboard=needs.keyboard,
+            mouse=needs.mouse,
+            display=self._runtime.display,
+            width=int(self._runtime.settings.width),
+            height=int(self._runtime.settings.height),
+        )
         await self._runtime.start(game_id)
         self._source = make_source(
             capture_display=self._runtime.captures_display,
             display=self._runtime.display,
+            draw_mouse=needs.mouse,
         )
         self._source.start()
 

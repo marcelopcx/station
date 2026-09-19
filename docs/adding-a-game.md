@@ -28,10 +28,18 @@ env:
 needs:
   display: true
   audio: true
-  gamepad: true
+  gamepad: 0          # 0 = sin pads; 1, 2, 3 o 4 simultáneos
+  keyboard: false     # teclas del browser → XTEST
+  mouse: false        # puntero del browser → XTEST
 audio:
   fallbackArgs: []
 ```
+
+`needs.gamepad` es un entero **0, 1, 2, 3 o 4**. Cero significa que el
+juego no acepta gamepad. Junto con `keyboard` y `mouse` se combinan:
+puede ser solo mouse, solo 2 pads, o todo junto. El runtime abre esa
+cantidad de uinput y, si hace falta, un injector X11. El cliente lee
+`needs` de `GET /health` y de `POST /launch`.
 
 Placeholders: `${WIDTH}` `${HEIGHT}` `${SIZE}` `${CACHE}` `${LIBRARY}` `${DISPLAY}`.
 

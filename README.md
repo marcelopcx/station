@@ -24,7 +24,7 @@ controller/
   catalog/     un manifest.yaml por imagen
   prepare/     /library → /cache
   runtime/     Xvfb, Pulse `game`, proceso (desde el manifiesto)
-  input/       uinput pad
+  input/       uinput pads + XTEST teclado/ratón
   webrtc/      peer, captura, signaling, ICE
   config.py    env que el loader setea por contenedor
 docker/

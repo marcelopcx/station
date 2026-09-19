@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from controller.config import Settings, interpolate
 from controller.contract.errors import UnknownGame
@@ -20,9 +20,26 @@ log = logging.getLogger("game-station.catalog")
 
 
 class GameNeeds(BaseModel):
+    """Qué inyecta la estación. Cualquier combinación es válida.
+
+    `gamepad`: 0 = no acepta pads; 1, 2, 3 o 4 = esa cantidad a la vez.
+    `true`/`false` del YAML viejo se lee como 1 y 0.
+    """
+
     display: bool = True
     audio: bool = True
-    gamepad: bool = True
+    gamepad: Literal[0, 1, 2, 3, 4] = 0
+    keyboard: bool = False
+    mouse: bool = False
+
+    @field_validator("gamepad", mode="before")
+    @classmethod
+    def _coerce_gamepad(cls, value: object) -> object:
+        if value is None:
+            return 0
+        if isinstance(value, bool):
+            return 1 if value else 0
+        return value
 
 
 class GameAudio(BaseModel):

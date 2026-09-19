@@ -112,6 +112,7 @@ class Station:
         }
         if self._catalog is not None:
             body["supportedGameId"] = self._catalog.game_id
+            body["needs"] = self._catalog.manifest.needs.model_dump()
         if self._settings is not None:
             body["httpPort"] = self._settings.http_port
             body["display"] = self._settings.display
@@ -321,7 +322,13 @@ class Station:
             self._stream.encoder_name() or "vp8",
         )
         self._idle_task = asyncio.create_task(self._idle_watch())
-        return {"state": StationState.PLAYING.value, "wsUrl": "/ws/webrtc"}
+        body: dict[str, Any] = {
+            "state": StationState.PLAYING.value,
+            "wsUrl": "/ws/webrtc",
+        }
+        if self._catalog is not None:
+            body["needs"] = self._catalog.manifest.needs.model_dump()
+        return body
 
     async def _idle_watch(self) -> None:
         timeout = self._idle_timeout_s

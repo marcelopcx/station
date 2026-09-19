@@ -1,38 +1,76 @@
-"""Paquete DataChannel `input` (8 bytes LE) e inyección como gamepad.
+"""Pads virtuales vía `/dev/uinput`.
 
-B0: parse_packet. B1: log. B5: uinput. type=1/2 se ignoran.
+Hasta 4 dispositivos Xbox 360. El mapping SDL se exporta a
+`SDL_GAMECONTROLLERCONFIG` si el manifiesto pide `needs.gamepad` > 0.
+
 `evdev` es opcional: en el Mac `open()` cae a log.
-
-El mapping SDL es genérico (pad Xbox 360 virtual). El runtime lo exporta
-a `SDL_GAMECONTROLLERCONFIG` si el manifiesto pide `needs.gamepad`.
 """
 
 from __future__ import annotations
 
 import logging
-import struct
 import time
-from dataclasses import dataclass
 from typing import Any, Optional
+
+from controller.input.packet import (
+    ACTION_AXIS,
+    ACTION_DOWN,
+    ACTION_UP,
+    TYPE_KEY,
+    TYPE_PAD,
+    InputEvent,
+    parse_packet,
+)
 
 log = logging.getLogger("game-station.input")
 
-_PACKET = struct.Struct("<BBHi")  # 8 bytes
-
-TYPE_KEY = 1
-TYPE_PAD = 3
-ACTION_DOWN = 1
-ACTION_UP = 2
-ACTION_AXIS = 4
-
-# GUID USB Xbox 360 (045e:028e, version 0x0110) = el pad virtual de este módulo.
-SDL_GAMECONTROLLER_MAPPING = (
-    "030000005e0400008e02000010010000,Airtek Cloud Pad,"
+# GUID USB Xbox 360 (045e:028e, version 0x0110) = pad 0 de este módulo.
+_SDL_BINDINGS = (
     "a:b0,b:b1,x:b2,y:b3,back:b6,start:b7,guide:b8,"
     "leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,"
     "leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,"
-    "dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,platform:Linux,\n"
+    "dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,platform:Linux,"
 )
+
+
+def _sdl_guid(product: int) -> str:
+    vendor = 0x045E
+    version = 0x0110
+    raw = bytes(
+        [
+            0x03,
+            0x00,
+            0x00,
+            0x00,
+            vendor & 0xFF,
+            (vendor >> 8) & 0xFF,
+            0x00,
+            0x00,
+            product & 0xFF,
+            (product >> 8) & 0xFF,
+            0x00,
+            0x00,
+            version & 0xFF,
+            (version >> 8) & 0xFF,
+            0x00,
+            0x00,
+        ]
+    )
+    return raw.hex()
+
+
+def sdl_controller_config(n: int) -> str:
+    """Una línea SDL por pad (product id 0x028E + slot)."""
+    n = max(0, min(4, int(n)))
+    lines: list[str] = []
+    for index in range(n):
+        product = 0x028E + index
+        name = "Airtek Cloud Pad" if index == 0 else f"Airtek Cloud Pad {index + 1}"
+        lines.append(f"{_sdl_guid(product)},{name},{_SDL_BINDINGS}")
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
+SDL_GAMECONTROLLER_MAPPING = sdl_controller_config(1)
 
 try:
     from evdev import AbsInfo, UInput
@@ -44,35 +82,6 @@ except ImportError:
     UInput = None  # type: ignore[misc, assignment]
     _e = None  # type: ignore[assignment]
     _EVDEV = False
-
-
-@dataclass(frozen=True)
-class InputEvent:
-    type: int
-    action: int
-    code: int
-    extra: int
-
-    @property
-    def is_pad_button(self) -> bool:
-        return self.type == TYPE_PAD and self.action in (ACTION_DOWN, ACTION_UP)
-
-    @property
-    def is_pad_axis(self) -> bool:
-        return self.type == TYPE_PAD and self.action == ACTION_AXIS
-
-    @property
-    def pressed(self) -> bool:
-        return self.action == ACTION_DOWN
-
-
-def parse_packet(data: bytes) -> InputEvent | None:
-    if len(data) != _PACKET.size:
-        return None
-    typ, action, code, extra = _PACKET.unpack(data)
-    if typ not in (1, 2, 3) or action not in (1, 2, 3, 4):
-        return None
-    return InputEvent(typ, action, code, extra)
 
 
 def _pad_maps() -> tuple[dict[int, int], dict[int, int], Any, Any] | None:
@@ -106,25 +115,21 @@ def _pad_maps() -> tuple[dict[int, int], dict[int, int], Any, Any] | None:
     return btn, abs_map, stick, trigger
 
 
-class InputSink:
-    """Pad virtual vía `/dev/uinput`, o solo log si no hay evdev/device."""
+class PadDevice:
+    """Un pad Xbox 360 virtual."""
 
-    def __init__(self) -> None:
+    def __init__(self, index: int) -> None:
+        self.index = index
         self._ui: Optional[Any] = None
         self._btn: dict[int, int] = {}
         self._abs: dict[int, int] = {}
         self._hat_x = 0
         self._hat_y = 0
-        self.last_input_monotonic: Optional[float] = None
 
-    def open(self) -> None:
-        self.last_input_monotonic = None
-        if self._ui is not None:
-            return
+    def open(self) -> bool:
         maps = _pad_maps()
         if maps is None or UInput is None or _e is None:
-            log.warning("input_backend=log (evdev no instalado)")
-            return
+            return False
         btn, abs_map, stick, trigger = maps
         self._btn = btn
         self._abs = abs_map
@@ -147,46 +152,33 @@ class InputSink:
                 ),
             ],
         }
+        product = 0x028E + self.index
+        name = "Airtek Cloud Pad" if self.index == 0 else f"Airtek Cloud Pad {self.index + 1}"
         try:
             self._ui = UInput(
                 cap,
-                name="Airtek Cloud Pad",
+                name=name,
                 bustype=_e.BUS_USB,
                 vendor=0x045E,
-                product=0x028E,
+                product=product,
                 version=0x0110,
             )
             dev = getattr(self._ui, "device", None)
             path = getattr(dev, "path", None) if dev is not None else None
-            log.info("input_backend=uinput path=%s", path)
-            time.sleep(0.5)
+            log.info("input_backend=uinput pad=%s path=%s", self.index, path)
+            return True
         except OSError:
             self._ui = None
-            log.warning("input_backend=log (/dev/uinput no disponible)")
+            log.warning("input_backend=log pad=%s (/dev/uinput no disponible)", self.index)
+            return False
 
     def close(self) -> None:
-        self.last_input_monotonic = None
         ui = self._ui
         self._ui = None
         if ui is not None:
             ui.close()
 
-    def handle(self, data: bytes) -> None:
-        ev = parse_packet(data)
-        if ev is None:
-            log.warning("input: paquete inválido len=%s", len(data))
-            return
-        self.last_input_monotonic = time.monotonic()
-        if ev.is_pad_button:
-            log.info("input pad %s code=%s", "down" if ev.pressed else "up", ev.code)
-            self._button(ev.code, 1 if ev.pressed else 0)
-            return
-        if ev.is_pad_axis:
-            log.info("input axis code=%s extra=%s", ev.code, ev.extra)
-            self._axis(ev.code, ev.extra)
-            return
-
-    def _button(self, code: int, value: int) -> None:
+    def button(self, code: int, value: int) -> None:
         if self._ui is None or _e is None:
             return
         if code in (12, 13, 14, 15):
@@ -196,6 +188,16 @@ class InputSink:
         if btn is None:
             return
         self._ui.write(_e.EV_KEY, btn, value)
+        self._ui.syn()
+
+    def axis(self, code: int, extra: int) -> None:
+        if self._ui is None or _e is None:
+            return
+        axis = self._abs.get(code)
+        if axis is None:
+            return
+        lo, hi = (0, 32767) if axis in (_e.ABS_Z, _e.ABS_RZ) else (-32767, 32767)
+        self._ui.write(_e.EV_ABS, axis, max(lo, min(hi, extra)))
         self._ui.syn()
 
     def _hat(self, code: int, value: int) -> None:
@@ -214,12 +216,33 @@ class InputSink:
         self._ui.write(_e.EV_ABS, _e.ABS_HAT0Y, self._hat_y)
         self._ui.syn()
 
-    def _axis(self, code: int, extra: int) -> None:
-        if self._ui is None or _e is None:
-            return
-        axis = self._abs.get(code)
-        if axis is None:
-            return
-        lo, hi = (0, 32767) if axis in (_e.ABS_Z, _e.ABS_RZ) else (-32767, 32767)
-        self._ui.write(_e.EV_ABS, axis, max(lo, min(hi, extra)))
-        self._ui.syn()
+
+def open_pads(n: int) -> list[PadDevice]:
+    n = max(0, min(4, int(n)))
+    if n == 0:
+        return []
+    maps = _pad_maps()
+    if maps is None:
+        log.warning("input_backend=log (evdev no instalado)")
+        return []
+    pads = [PadDevice(i) for i in range(n)]
+    opened = [pad for pad in pads if pad.open()]
+    if opened:
+        time.sleep(0.5)
+    return pads
+
+
+# Reexportados: el parser vive en packet.py; el sink público en sink.py.
+__all__ = [
+    "ACTION_AXIS",
+    "ACTION_DOWN",
+    "ACTION_UP",
+    "InputEvent",
+    "PadDevice",
+    "SDL_GAMECONTROLLER_MAPPING",
+    "TYPE_KEY",
+    "TYPE_PAD",
+    "open_pads",
+    "parse_packet",
+    "sdl_controller_config",
+]

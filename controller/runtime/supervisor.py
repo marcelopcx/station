@@ -11,7 +11,7 @@ from typing import Optional
 
 from controller.catalog import GameCatalog, GameManifest
 from controller.config import Settings, interpolate
-from controller.input.gamepad import SDL_GAMECONTROLLER_MAPPING
+from controller.input.gamepad import sdl_controller_config
 from controller.runtime.audio import PulseServer
 from controller.runtime.display import DisplayServer
 from controller.runtime.process import ProcessGroup
@@ -33,6 +33,13 @@ class GameRuntime:
         self._display = DisplayServer(self._settings, self._procs)
         self._pulse = PulseServer(self._settings)
         self._manifest: Optional[GameManifest] = None
+
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    def manifest_for(self, game_id: str) -> GameManifest:
+        return self._resolve(game_id)
 
     @property
     def display(self) -> str:
@@ -82,7 +89,10 @@ class GameRuntime:
         self._pulse.apply_env(env)
         env.update(manifest.interpolated_env(self._settings))
         if manifest.needs.gamepad:
-            env.setdefault("SDL_GAMECONTROLLERCONFIG", SDL_GAMECONTROLLER_MAPPING)
+            env.setdefault(
+                "SDL_GAMECONTROLLERCONFIG",
+                sdl_controller_config(manifest.needs.gamepad),
+            )
         await self._procs.spawn(
             argv,
             env=env,

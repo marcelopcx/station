@@ -233,8 +233,9 @@ class SmpteBarsSource:
 class DisplayCaptureSource:
     """x11grab del DISPLAY + Pulse monitor. Encode: aiortc (VP8 / Opus)."""
 
-    def __init__(self, display: str = ":99") -> None:
+    def __init__(self, display: str = ":99", draw_mouse: bool = False) -> None:
         self._display = display
+        self._draw_mouse = draw_mouse
         self._relay = MediaRelay()
         self._player: Optional[MediaPlayer] = None
         self._audio: Optional[PulseAudioTrack] = None
@@ -257,7 +258,7 @@ class DisplayCaptureSource:
             options={
                 "video_size": CAPTURE_SIZE,
                 "framerate": CAPTURE_FPS,
-                "draw_mouse": "0",
+                "draw_mouse": "1" if self._draw_mouse else "0",
                 "probesize": "32",
             },
         )
@@ -300,7 +301,12 @@ class DisplayCaptureSource:
 VideoSource = Union[SmpteBarsSource, DisplayCaptureSource]
 
 
-def make_source(*, capture_display: bool, display: str) -> VideoSource:
+def make_source(
+    *,
+    capture_display: bool,
+    display: str,
+    draw_mouse: bool = False,
+) -> VideoSource:
     if not capture_display:
         return SmpteBarsSource()
-    return DisplayCaptureSource(display=display)
+    return DisplayCaptureSource(display=display, draw_mouse=draw_mouse)

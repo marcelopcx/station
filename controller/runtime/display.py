@@ -32,6 +32,8 @@ class DisplayServer:
                 "-ac",
                 "+extension",
                 "GLX",
+                "+extension",
+                "XTEST",
             ],
             env=os.environ.copy(),
             name="xvfb",

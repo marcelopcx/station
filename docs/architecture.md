@@ -12,7 +12,7 @@ controller/
 ├── catalog/        un GameManifest
 ├── prepare/        library → cache
 ├── runtime/        display / audio / process / supervisor
-├── input/          uinput
+├── input/          uinput pads + XTEST teclado/ratón
 ├── webrtc/         session, media, signaling, ice
 └── config.py       Settings.from_env()
 ```
