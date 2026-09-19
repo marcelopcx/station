@@ -1,4 +1,11 @@
 .venv
+.idea
+.DS_Store
+.git
 __pycache__
 *.pyc
-.git
+*.egg-info
+docs
+README.md
+compose.yaml
+compose.spark.yaml

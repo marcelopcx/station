@@ -1,172 +1,63 @@
-# Game Station — primer corte, fase S5
+# Game Station — runtime genérico
 
-Proceso del contenedor **GAME STATION**. Hoy (S1): FSM de sesión y un
-`RTCPeerConnection` que publica barras SMPTE. No es el MVP (S2+S3: juego +
-input remoto) ni G1 (Spring delante).
+Contenedor **GAME STATION**: API FastAPI `:8090`, display virtual, Pulse, pad
+uinput y WebRTC. **No incluye el juego.**
 
-El contrato REST/WS de este proceso es el que S2+S3, S4, S5 y el Dispatcher
-reutilizan. No versionar el JSON “para el prototipo”.
+El título vive en otra imagen (`games/<id>/` en la raíz del checkout),
+`FROM airtek/game-station-runtime`. Un contenedor = una partida. `POST /stop`
+mata la partida, no el contenedor.
 
-No sirve HTML. Cliente previsto: `game-client/`, Vite `:5173`.
+El **Game Loader** (aún no está) creará N copias de estas imágenes. El
+**Game Dispatcher** (Spring, G1) rutea la sesión. Este proceso se diseña
+como si ya los llamara: mismo REST/WS.
 
-Roadmap: [`../docs/guia-mvp-prototipo.md`](../docs/guia-mvp-prototipo.md).
-Arquitectura de **este** código: [`../docs/architecture.md`](../docs/architecture.md).
+Contrato HTTP: [`../docs/guia-mvp-backend.md`](../docs/guia-mvp-backend.md)
+(gana si hay conflicto de JSON).
 
-## Qué hay en el paquete vs. qué entra después
+## Árbol
 
 ```
-station/controller/
-├── app.py / machine.py / hub.py / … S0+S1 (verbos y estados se quedan)
-└── webrtc/
-    ├── signaling.py  ice.py         se conservan en S2+S3 / G1
-    ├── session.py                   un peer; S2+S3 no reescribe el WS
-    └── media.py                     S1 = smptebars; S2+S3 añade captura
+controller/
+  api/         FastAPI. Cero FSM.
+  contract/    models, states, errors (wire JSON)
+  session/     Station + Hub. No importa aiortc.
+  catalog/     un manifest.yaml por imagen
+  prepare/     /library → /cache
+  runtime/     Xvfb, Pulse `game`, proceso (desde el manifiesto)
+  input/       uinput pad
+  webrtc/      peer, captura, signaling, ICE
+  config.py    env que el loader setea por contenedor
+docker/
+  Dockerfile
+  entrypoint.sh
+  seed-library.sh
+  pulse/
+  openal/
 ```
 
-| Siguiente fase | Cambio en `game-station/` |
+## Arranque local (sin juego)
+
+```bash
+cd game-station
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn controller.api.app:app --host 127.0.0.1 --port 8090
+```
+
+Sin `/opt/game/manifest.yaml` la API sube; `prepare`/`launch` de un título
+fallan hasta usar una imagen de `games/`.
+
+## Imagen + juego (desde la raíz del checkout)
+
+```bash
+./scripts/build-station.sh supertuxkart   # o wesnoth | xonotic
+GAME=supertuxkart docker compose -f compose.spark.yaml up --build
+```
+
+Documentación:
+
+| Doc | Rol |
 | --- | --- |
-| **S2+S3** | Parsear DC `input` (pad); `runtime.py` + captura; uinput. Guía: [`../docs/guia-s2-s3-juego-e-input.md`](../docs/guia-s2-s3-juego-e-input.md) |
-| **S4** | `prepare` copia `/library` → `/cache` + checksum |
-| **S5** | encoder en `/health`, timeout de inactividad, logs |
-| G1 | nada aquí: Spring es **cliente** de `:8090` |
-
-## Layout S1
-
-```
-station/
-├── controller/           uvicorn: controller.app:app
-│   ├── app.py            composición FastAPI, CORS, rutas
-│   ├── machine.py        máquina de estados; no importa aiortc
-│   ├── hub.py            fan-out de /ws/control
-│   ├── states.py         IDLE | PREPARING | READY | PLAYING
-│   ├── errors.py         STATION_BUSY, GAME_NOT_READY, … → HTTP
-│   ├── models.py         bodies Pydantic (camelCase del wire)
-│   └── webrtc/
-│       ├── session.py    un RTCPeerConnection
-│       ├── media.py      SmpteBarsSource (lavfi) — se reemplaza/amplía en S2+S3
-│       ├── signaling.py  OFFER / ANSWER / ICE / ERROR
-│       └── ice.py        candidatos + loopback en aioice
-├── tests/                FSM con FakeStream (sin FFmpeg)
-├── Dockerfile
-├── compose.yaml
-└── requirements.txt
-```
-
-```
-app.py ──► Station (machine.py) ──► Hub
-        │                   └──► MediaSession (Protocol)
-        └──► WebrtcSession ──► media / signaling / ice
-```
-
-`Station` no importa `aiortc`. `WebrtcSession` no conoce los estados de la FSM.
-Ese corte es el que permite cambiar la fuente en S2+S3 sin tocar la FSM.
-
-## Arranque
-
-Local, sin Docker:
-
-```bash
-cd game-station
-source .venv/bin/activate
-uvicorn controller.app:app --host 127.0.0.1 --port 8090
-```
-
-Docker en el Mac (solo estación):
-
-```bash
-cd game-station
-docker compose up --build
-```
-
-S1 no usa NVENC: no hace falta `--gpus`.
-
-## Spark (S1)
-
-La estación y el cliente viven en contenedores con **host network** para que
-ICE publique IPs reales. El RTP de WebRTC es **UDP**: no viaja por el
-túnel SSH. Por eso `localhost:5173` por `-L` puede mostrar `ontrack` y luego
-`ice failed`.
-
-En el Spark, `game-station/` y `game-client/` son carpetas hermanas.
-
-### Internet (redes distintas, IP pública)
-
-El Spark anuncia solo la IP pública (`ICE_HOST_POLICY=public`). Chrome
-necesita HTTPS para WebRTC: nginx escucha **443** con un cert autofirmado.
-
-En el Spark:
-
-```bash
-ip -4 addr
-# IP pública del Spark, p. ej. 156.255.130.66
-
-sudo ufw allow OpenSSH
-sudo ufw allow 443/tcp
-sudo ufw allow 5173/tcp
-sudo ufw allow 10000:65535/udp
-sudo ufw --force enable
-sudo ufw status
-
-cd ~/airtek-cloud-game/game-station
-git pull
-cd ../game-client && git pull && cd ../game-station
-
-export ICE_HOST_IPS=156.255.130.66
-export PUBLIC_HOST=156.255.130.66
-docker compose -f compose.spark.yaml up --build -d
-docker compose -f compose.spark.yaml logs -f --tail=80
-```
-
-En los logs de `game-station` tiene que aparecer
-`ice hosts ... ipv4=['156.255.130.66']` (sin `10.212` ni `172.x`).
-
-En la laptop (cerrá el túnel `-L`):
-
-1. Abrí `https://156.255.130.66`
-2. Aceptá el certificado autofirmado (Avanzado → continuar)
-3. Play
-
-No uses `http://156.255.130.66:5173` en Chrome: no es secure context.
-
-`:5173` HTTP queda para el túnel SSH. No abras `:8090` a internet; el
-signaling va por `/station` en nginx.
-
-### LAN / VPN
-
-Misma red o VPN del Spark (`10.212.x.x`). El compose con
-`ICE_HOST_POLICY=public` **no** anuncia esa IP privada. Para LAN:
-
-```bash
-ICE_HOST_POLICY=all ICE_HOST_IPS= \
-  docker compose -f compose.spark.yaml up --build -d
-```
-
-```bash
-sudo ufw allow proto udp from 192.168.0.0/16
-sudo ufw allow proto udp from 10.0.0.0/8
-```
-
-Chrome en `http://<IP>:5173`: `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
-
-Variables:
-
-```
-STATION_ID=spark-1
-CORS_ORIGIN_REGEX=https?://.*
-ICE_INCLUDE_LOOPBACK=0
-ICE_HOST_POLICY=public
-ICE_HOST_IPS=156.255.130.66
-ICE_SERVERS=stun:stun.l.google.com:19302
-PUBLIC_HOST=156.255.130.66
-```
-
-## Tests
-
-```bash
-cd game-station
-source .venv/bin/activate
-python -m unittest discover -s tests -v
-```
-
-Cubren transiciones de FSM y parseo de signaling. El bitstream se verifica
-en el frontend (`http://localhost:5173`) cuando exista.
+| [docs/architecture.md](docs/architecture.md) | Módulos y grafo |
+| [docs/adding-a-game.md](docs/adding-a-game.md) | Cómo agregar un título |
+| [docs/loader-contract.md](docs/loader-contract.md) | Qué hará el loader con N contenedores |

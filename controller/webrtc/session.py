@@ -5,9 +5,6 @@
 
 Sin fuente: `NOT_PLAYING`. Si `_pc` ya existe: `PEER_BUSY`.
 No lee `StationState`.
-
-`_prefer_vp8` / `_prefer_opus` fijan codecs en el sender (libvpx / opus).
-El DataChannel `input` se acepta en `ondatachannel` y se parsea (`type=3` → uinput).
 """
 
 from __future__ import annotations
@@ -43,7 +40,6 @@ log = logging.getLogger("game-station.webrtc")
 
 
 def _prefer_vp8(pc: RTCPeerConnection) -> None:
-    """`setCodecPreferences` del sender de video a `video/VP8`."""
     vp8 = [
         codec
         for codec in RTCRtpSender.getCapabilities("video").codecs
@@ -79,7 +75,9 @@ class WebrtcSession:
         input_sink: Optional[InputSink] = None,
     ) -> None:
         self._lock = asyncio.Lock()
-        self._source: VideoSource = source or make_source("test-pattern", ":99")
+        self._source: VideoSource = source or make_source(
+            capture_display=False, display=":99"
+        )
         self._runtime = runtime or GameRuntime()
         self._input = input_sink or InputSink()
         self._pc: Optional[RTCPeerConnection] = None
@@ -99,7 +97,10 @@ class WebrtcSession:
         log.info("start_source game=%s encoder=vp8,opus", game_id)
         self._input.open()
         await self._runtime.start(game_id)
-        self._source = make_source(game_id, self._runtime.display)
+        self._source = make_source(
+            capture_display=self._runtime.captures_display,
+            display=self._runtime.display,
+        )
         self._source.start()
 
     async def stop(self) -> None:

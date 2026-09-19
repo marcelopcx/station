@@ -1,10 +1,17 @@
-"""Controller de la Game Station.
+"""Runtime genérico de una Game Station.
 
-Orquesta `prepare` / `launch` / `stop`. En `PLAYING` publica un
-`VideoStreamTrack` por un `RTCPeerConnection`.
+Un proceso = un contenedor = una partida. El título lo define el
+`manifest.yaml` de la imagen (`/opt/game/manifest.yaml`), no este paquete.
 
-    app.py       FastAPI: rutas HTTP y WebSocket
-    machine.py   máquina de estados
-    hub.py       fan-out de `/ws/control`
-    webrtc/      SDP, ICE, fuente de video, peer
+Módulos (un rol cada uno; no importar al revés del grafo):
+
+    api        FastAPI: CORS y rutas. Cero FSM, cero aiortc.
+    contract   JSON del wire (models, states, errors).
+    session    FSM prepare/launch/stop + Hub. No importa aiortc.
+    catalog    Un manifiesto por imagen.
+    prepare    /library → /cache + checksum.
+    runtime    Xvfb, Pulse, proceso del juego (desde el manifiesto).
+    input      Gamepad virtual uinput.
+    webrtc     Peer, signaling, captura. No lee StationState.
+    config     Variables de entorno. El loader futuro las setea por contenedor.
 """

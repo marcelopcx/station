@@ -1,4 +1,4 @@
-"""S4: copiar `source.path` de /library a /cache y verificar checksum.
+"""Copia `source.path` de /library a /cache y verifica checksum.
 
 `source.type=azure-sas` queda para post-prototipo (misma forma que `http`:
 una URL firmada). Este módulo no habla con Azure.
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from controller.models import Source
+from controller.contract.models import Source
 
 log = logging.getLogger("game-station.prepare")
 
@@ -147,7 +147,6 @@ class FilePreparer:
         on_progress: ProgressFn,
     ) -> PrepareOutcome:
         if source.type == "azure-sas":
-            # Misma forma que `http` (URL firmada). No hay SDK de Azure en este corte.
             raise PrepareError(
                 "UNSUPPORTED_SOURCE",
                 "azure-sas entra después del prototipo; usá source.type=local",

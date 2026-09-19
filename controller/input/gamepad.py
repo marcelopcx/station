@@ -2,6 +2,9 @@
 
 B0: parse_packet. B1: log. B5: uinput. type=1/2 se ignoran.
 `evdev` es opcional: en el Mac `open()` cae a log.
+
+El mapping SDL es genérico (pad Xbox 360 virtual). El runtime lo exporta
+a `SDL_GAMECONTROLLERCONFIG` si el manifiesto pide `needs.gamepad`.
 """
 
 from __future__ import annotations
@@ -21,6 +24,15 @@ TYPE_PAD = 3
 ACTION_DOWN = 1
 ACTION_UP = 2
 ACTION_AXIS = 4
+
+# GUID USB Xbox 360 (045e:028e, version 0x0110) = el pad virtual de este módulo.
+SDL_GAMECONTROLLER_MAPPING = (
+    "030000005e0400008e02000010010000,Airtek Cloud Pad,"
+    "a:b0,b:b1,x:b2,y:b3,back:b6,start:b7,guide:b8,"
+    "leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,"
+    "leftx:a0,lefty:a1,rightx:a3,righty:a4,lefttrigger:a2,righttrigger:a5,"
+    "dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,platform:Linux,\n"
+)
 
 try:
     from evdev import AbsInfo, UInput
@@ -147,7 +159,6 @@ class InputSink:
             dev = getattr(self._ui, "device", None)
             path = getattr(dev, "path", None) if dev is not None else None
             log.info("input_backend=uinput path=%s", path)
-            # El nodo /dev/input/event* lo crea el kernel/udev un instante después.
             time.sleep(0.5)
         except OSError:
             self._ui = None

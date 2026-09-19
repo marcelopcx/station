@@ -1,6 +1,5 @@
 # Pulse en el contenedor (sin hardware). Socket anónimo en /tmp.
-# STK (OpenAL) y ffmpeg leen stk.monitor.
-load-module module-null-sink sink_name=stk sink_properties=device.description=STK
+load-module module-null-sink sink_name=game sink_properties=device.description=Game
 load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse/native
-# Solo loopback: compose usa host network, no publicar 0.0.0.0.
+# Solo loopback: compose Spark usa host network, no publicar 0.0.0.0.
 load-module module-native-protocol-tcp auth-anonymous=1 listen=127.0.0.1 port=4713

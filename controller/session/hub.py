@@ -3,10 +3,6 @@
 Serializa `{ type: STATE, state, progress, message, cacheHit }` y lo
 envía a todos los sockets. No interpreta el payload. El RTP no pasa por
 aquí.
-
-`_lock` cubre el set de clientes. `broadcast` copia la lista bajo el lock
-y hace `send_text` fuera, para no bloquear `connect`/`disconnect`. Los
-sockets que fallan se descartan en un segundo acquire.
 """
 
 from __future__ import annotations

@@ -7,6 +7,7 @@ que FastAPI añade por defecto.
     STATION_BUSY          409   launch con state == PLAYING
     PREPARE_IN_PROGRESS   409   prepare con state ∈ {PREPARING, PLAYING}
     GAME_NOT_READY        424   launch con state != READY
+    UNKNOWN_GAME          400   gameId no coincide con el manifiesto de la imagen
     BAD_REQUEST           400   base; Pydantic usa 422 en validación
 """
 
@@ -38,6 +39,20 @@ class GameNotReady(StationError):
     code = "GAME_NOT_READY"
     message = "Hay que preparar el juego antes de lanzar"
     http_status = 424
+
+
+class UnknownGame(StationError):
+    """Esta imagen está bakeada para un solo `gameId` (el del manifiesto)."""
+
+    code = "UNKNOWN_GAME"
+    http_status = 400
+
+    def __init__(self, game_id: str, supported: str | None = None) -> None:
+        if supported:
+            self.message = f"esta imagen sirve {supported}, no {game_id}"
+        else:
+            self.message = f"gameId desconocido: {game_id}"
+        super().__init__(self.message)
 
 
 def to_http_exception(exc: StationError) -> HTTPException:

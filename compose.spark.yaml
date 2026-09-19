@@ -1,12 +1,25 @@
-# Estación + cliente S2+S3 en el Spark. Host network: ICE/UDP usa las NICs reales.
-# game-client tiene que estar al lado: ../game-client
+# Preferí el compose de la raíz del checkout:
+#   cd .. && GAME=supertuxkart docker compose -f compose.spark.yaml up --build
 #
-#   ICE_HOST_IPS=156.255.130.66 PUBLIC_HOST=156.255.130.66 \
-#     docker compose -f compose.spark.yaml up --build
+# Este archivo queda para quien trabaje solo dentro de game-station/.
+name: airtek-station
+
 services:
+  runtime:
+    image: airtek/game-station-runtime:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    entrypoint: ["/bin/true"]
+    restart: "no"
+    init: true
+
   game-station:
-    build: .
-    image: airtek/game-station:s2
+    image: airtek/game-station-${GAME:-supertuxkart}
+    build:
+      context: ../games/${GAME:-supertuxkart}
+      args:
+        RUNTIME_IMAGE: airtek/game-station-runtime:latest
     network_mode: host
     runtime: nvidia
     environment:
@@ -21,7 +34,6 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: all
       STATION_DISPLAY: ":99"
       STATION_SIZE: "1280x720"
-      STK_BIN: /opt/stk/run_game.sh
       LIBRARY_ROOT: /opt/station-library
       CACHE_ROOT: /cache
       IDLE_TIMEOUT_S: ${IDLE_TIMEOUT_S:-300}
@@ -33,6 +45,9 @@ services:
       - station-cache:/cache
     device_cgroup_rules:
       - "c 13:* rmw"
+    depends_on:
+      runtime:
+        condition: service_completed_successfully
     init: true
     restart: unless-stopped
     healthcheck:
@@ -41,7 +56,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=2)",
+          "import os,urllib.request; p=os.environ.get('STATION_HTTP_PORT','8090'); urllib.request.urlopen(f'http://127.0.0.1:{p}/health', timeout=2)",
         ]
       interval: 5s
       timeout: 3s
@@ -54,7 +69,7 @@ services:
       args:
         VITE_STATION_URL: /station
         VITE_ICE_SERVERS: stun:stun.l.google.com:19302
-        VITE_GAME_ID: supertuxkart
+        VITE_GAME_ID: ${GAME:-supertuxkart}
     image: airtek/game-client:s2
     network_mode: host
     environment:
@@ -69,5 +84,3 @@ services:
 
 volumes:
   station-cache:
-
-

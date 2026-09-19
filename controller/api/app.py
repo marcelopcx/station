@@ -1,20 +1,14 @@
 """FastAPI: rutas, CORS y lifespan.
 
-Los handlers delegan en `Station`. `create_app(station=...)` permite
-inyectar un doble y no abrir FFmpeg en tests.
+Los handlers delegan en `Station`. `create_app(station=...)` inyecta
+la estación (p. ej. en un proceso de prueba manual).
 
     GET  /health       snapshot de estado (sin `progress`)
-    POST /prepare      202; copia /library → /cache (S4)
+    POST /prepare      202; copia /library → /cache
     POST /launch       200 + `wsUrl`; arranca la fuente de video
     POST /stop         204; cierra peer y fuente; vuelve a IDLE
     WS   /ws/control   eventos STATE; el inbound se ignora
     WS   /ws/webrtc    signaling SDP/ICE; la guardia de estado está en Station
-
-CORS: `CORS_ORIGINS` (lista separada por comas; default Vite :5173).
-`STATION_ID` entra en `/health` (default `spark-1`).
-
-`/ws/control` lee en loop: si el handler retorna, FastAPI no detecta el
-close del cliente.
 """
 
 from __future__ import annotations
@@ -27,40 +21,41 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-from controller.errors import StationError, http_exception_handler, to_http_exception
-from controller.hub import Hub
-from controller.machine import Station
-from controller.models import LaunchRequest, PrepareRequest, StopRequest
-from controller.webrtc import WebrtcSession, configure_ice_hosts
+from controller.catalog import load_catalog
+from controller.config import Settings
+from controller.contract.errors import StationError, http_exception_handler, to_http_exception
+from controller.contract.models import LaunchRequest, PrepareRequest, StopRequest
+from controller.runtime import GameRuntime
+from controller.session import Hub, Station
+from controller.webrtc.session import WebrtcSession
+from controller.webrtc.ice import configure_ice_hosts
 
 log = logging.getLogger("game-station.app")
 
-_DEFAULT_CORS = "http://localhost:5173,http://127.0.0.1:5173"
 
-
-def cors_origins() -> list[str]:
-    raw = os.environ.get("CORS_ORIGINS", _DEFAULT_CORS)
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
-
-
-def create_station() -> Station:
-    cache = os.environ.get("CACHE_ROOT", "/cache")
-    library = os.environ.get("LIBRARY_ROOT", "/opt/station-library")
+def create_station(settings: Settings | None = None) -> Station:
+    settings = settings or Settings.from_env()
     try:
-        os.makedirs(cache, exist_ok=True)
+        os.makedirs(settings.cache_root, exist_ok=True)
     except OSError:
         pass
+    catalog = load_catalog(settings.game_manifest)
+    runtime = GameRuntime(settings=settings, catalog=catalog)
     return Station(
         hub=Hub(),
-        stream=WebrtcSession(),
-        station_id=os.environ.get("STATION_ID", "spark-1"),
-        library_root=library,
-        cache_root=cache,
+        stream=WebrtcSession(runtime=runtime),
+        station_id=settings.station_id,
+        library_root=settings.library_root,
+        cache_root=settings.cache_root,
+        idle_timeout_s=settings.idle_timeout_s,
+        catalog=catalog,
+        settings=settings,
     )
 
 
 def create_app(station: Station | None = None) -> FastAPI:
-    station = station or create_station()
+    settings = Settings.from_env()
+    station = station or create_station(settings)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -73,16 +68,22 @@ def create_app(station: Station | None = None) -> FastAPI:
             )
             gs.addHandler(handler)
         configure_ice_hosts()
-        log.info("game-station ready id=%s", station.station_id)
+        supported = station.snapshot().get("supportedGameId")
+        log.info(
+            "game-station ready id=%s game=%s port=%s",
+            station.station_id,
+            supported or "-",
+            settings.http_port,
+        )
         yield
         await station.stop()
 
-    app = FastAPI(title="Airtek Game Station", version="s5", lifespan=lifespan)
+    app = FastAPI(title="Airtek Game Station", version="1.0", lifespan=lifespan)
     app.state.station = station
     app.add_exception_handler(HTTPException, http_exception_handler)
 
-    origins = cors_origins()
-    origin_regex = os.environ.get("CORS_ORIGIN_REGEX", "").strip() or None
+    origins = settings.cors_origins
+    origin_regex = settings.cors_origin_regex
     log.info("cors origins=%s regex=%s", origins, origin_regex)
     app.add_middleware(
         CORSMiddleware,

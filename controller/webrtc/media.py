@@ -1,9 +1,10 @@
 """Fuentes de video/audio para `WebrtcSession`.
 
-    SmpteBarsSource         lavfi smptebars (Mac / fallback); sine lavfi
-    DisplayCaptureSource    x11grab + Pulse `stk.monitor` (Spark)
+    SmpteBarsSource         lavfi smptebars (fallback / tests)
+    DisplayCaptureSource    x11grab + Pulse monitor
 
 El encode (VP8 / Opus) lo hace aiortc en el `RTCRtpSender`, no estas clases.
+La elección display vs SMPTE la hace el manifiesto (`needs.display`), no un gameId.
 """
 
 from __future__ import annotations
@@ -23,14 +24,12 @@ from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame
 
-from controller.games import needs_display
-
 log = logging.getLogger("game-station.webrtc.media")
 
 SMPTE_LAVFI = "smptebars=size=1280x720:rate=30"
 CAPTURE_SIZE = os.environ.get("STATION_SIZE", "1280x720")
 CAPTURE_FPS = os.environ.get("STATION_FPS", "30")
-PULSE_SOURCE = os.environ.get("STATION_PULSE_SOURCE", "stk.monitor")
+PULSE_SOURCE = os.environ.get("STATION_PULSE_SOURCE", "game.monitor")
 
 _AUDIO_RATE = 48000
 _AUDIO_SAMPLES = 960  # 20 ms
@@ -211,7 +210,6 @@ class SmpteBarsSource:
         self._player = MediaPlayer(SMPTE_LAVFI, format="lavfi")
 
     def subscribe_video(self):
-        """Track clonado para `addTrack`, o `None` si no hay player."""
         if self._player is None or self._player.video is None:
             return None
         return self._relay.subscribe(self._player.video, buffered=False)
@@ -302,7 +300,7 @@ class DisplayCaptureSource:
 VideoSource = Union[SmpteBarsSource, DisplayCaptureSource]
 
 
-def make_source(game_id: str, display: str) -> VideoSource:
-    if not needs_display(game_id):
+def make_source(*, capture_display: bool, display: str) -> VideoSource:
+    if not capture_display:
         return SmpteBarsSource()
     return DisplayCaptureSource(display=display)

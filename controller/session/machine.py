@@ -8,22 +8,14 @@ No construye SDP ni ICE: el video se delega en un `MediaSession`.
       │                    └── FAILED ── stop / timeout ────────────────┤
       └────────────────────────────── stop ─────────────────────────────┘
 
-`prepare` (S4) copia `/library` → `/cache` y verifica checksum. `version` y
-`source` sí se leen. Checksum malo → ERROR + FAILED.
-
-`launch`: solo desde `READY`. Pasa a `PLAYING` y después llama
-`await start_source(game_id)`. Si la fuente falla, `stop()` vuelve a `IDLE`.
-
-`stop`: cierra el peer y la fuente, cancela un prepare en vuelo, vuelve a
-`IDLE`. El proceso uvicorn no termina.
-
-S5: sin paquetes `input` `idle_timeout_s` → `stop` interno. `/health` declara
-el encoder.
+`stop` cierra el peer y la fuente; el proceso uvicorn no termina.
+No importa `controller.webrtc`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -31,17 +23,17 @@ from typing import Any, Optional, Protocol
 
 from fastapi import WebSocket
 
-from controller.errors import GameNotReady, PrepareInProgress, StationBusy
-from controller.hub import Hub
-from controller.models import Source
+from controller.catalog import GameCatalog
+from controller.config import Settings
+from controller.contract.errors import GameNotReady, PrepareInProgress, StationBusy
+from controller.contract.models import Source
+from controller.contract.states import StationState
 from controller.prepare import FilePreparer, PrepareError, list_cache
-from controller.states import StationState
-from controller.webrtc.signaling import ERROR_NOT_PLAYING, dumps_error
+from controller.session.hub import Hub
 
 log = logging.getLogger("game-station.machine")
 
-_LIBRARY = os.environ.get("LIBRARY_ROOT", "/opt/station-library")
-_CACHE = os.environ.get("CACHE_ROOT", "/cache")
+_ERROR_NOT_PLAYING = json.dumps({"type": "ERROR", "code": "NOT_PLAYING"})
 
 
 class MediaSession(Protocol):
@@ -74,9 +66,13 @@ class Station:
         idle_timeout_s: float | None = None,
         failed_idle_s: float = 2.0,
         preparer: FilePreparer | None = None,
+        catalog: GameCatalog | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._hub = hub
         self._stream = stream
+        self._catalog = catalog
+        self._settings = settings
         self.station_id = station_id
         self.state = StationState.IDLE
         self.game_id: Optional[str] = None
@@ -93,10 +89,10 @@ class Station:
             else idle_timeout_s
         )
         self._failed_idle_s = failed_idle_s
-        self._cache_root = os.fspath(cache_root or _CACHE)
-        self._preparer = preparer or FilePreparer(
-            library_root or _LIBRARY, self._cache_root
-        )
+        cache = os.fspath(cache_root or (settings.cache_root if settings else "/cache"))
+        library = library_root or (settings.library_root if settings else "/opt/station-library")
+        self._cache_root = cache
+        self._preparer = preparer or FilePreparer(library, self._cache_root)
         self._last_cache_hit = False
         self._playing_since: Optional[float] = None
 
@@ -105,7 +101,7 @@ class Station:
         encoder = None
         if self.state == StationState.PLAYING:
             encoder = self._stream.encoder_name()
-        return {
+        body: dict[str, Any] = {
             "status": "UP",
             "stationId": self.station_id,
             "state": self.state.value,
@@ -114,6 +110,16 @@ class Station:
             "encoder": encoder,
             "cache": list_cache(self._preparer.cache_root),
         }
+        if self._catalog is not None:
+            body["supportedGameId"] = self._catalog.game_id
+        if self._settings is not None:
+            body["httpPort"] = self._settings.http_port
+            body["display"] = self._settings.display
+        return body
+
+    def _assert_game(self, game_id: str) -> None:
+        if self._catalog is not None:
+            self._catalog.require(game_id)
 
     def _event(
         self,
@@ -143,7 +149,7 @@ class Station:
         Sin `PLAYING` no se crea `RTCPeerConnection`: `ERROR NOT_PLAYING` y close.
         """
         if self.state != StationState.PLAYING:
-            await ws.send_text(dumps_error(ERROR_NOT_PLAYING))
+            await ws.send_text(_ERROR_NOT_PLAYING)
             await ws.close()
             return
         await self._stream.attach(ws)
@@ -155,6 +161,7 @@ class Station:
         version: str = "1.0.0",
         source: Source | None = None,
     ) -> dict[str, Any]:
+        self._assert_game(game_id)
         async with self._lock:
             if self.state in (StationState.PREPARING, StationState.PLAYING):
                 raise PrepareInProgress()
@@ -279,6 +286,7 @@ class Station:
             return
 
     async def launch(self, session_id: str, game_id: str) -> dict[str, Any]:
+        self._assert_game(game_id)
         async with self._lock:
             if self.state == StationState.PLAYING:
                 raise StationBusy()

@@ -1,12 +1,17 @@
-"""WebRTC: fuente de video, signaling JSON y un `RTCPeerConnection`.
+"""WebRTC: fuente, signaling JSON y un `RTCPeerConnection`.
 
-    media.py        smptebars o x11grab+pulse → tracks VP8/Opus
-    signaling.py    OFFER / ANSWER / ICE / ERROR
-    ice.py          RTCIceCandidate ↔ JSON; loopback en aioice
-    session.py      un peer; junta las tres + DataChannel input
+Importar submódulos (`ice`, `signaling`, `session`) para no arrastrar aiortc
+cuando solo se parsea JSON.
 """
 
 from controller.webrtc.ice import configure_ice_hosts, enable_loopback_hosts
-from controller.webrtc.session import WebrtcSession
 
 __all__ = ["WebrtcSession", "configure_ice_hosts", "enable_loopback_hosts"]
+
+
+def __getattr__(name: str):
+    if name == "WebrtcSession":
+        from controller.webrtc.session import WebrtcSession
+
+        return WebrtcSession
+    raise AttributeError(name)

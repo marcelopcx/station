@@ -1,0 +1,5 @@
+# Pulse en user-mode. El sink se llama `game` (no el título).
+load-module module-null-sink sink_name=game sink_properties=device.description=Game
+load-module module-native-protocol-unix auth-anonymous=1 auth-cookie-enabled=0 socket=/tmp/pulse/native
+set-default-sink game
+set-default-source game.monitor

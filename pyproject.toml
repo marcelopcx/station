@@ -1,13 +1,9 @@
 [project]
 name = "airtek-game-station"
-version = "0.1.0"
-description = "Controller de la Game Station: máquina de estados, signaling WebRTC y fuente de video"
+version = "1.0.0"
+description = "Runtime genérico de Game Station: FSM, WebRTC, display, audio e input. El juego vive en otra imagen."
 requires-python = ">=3.12"
 readme = "README.md"
 
 [tool.setuptools.packages.find]
 include = ["controller*"]
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
