@@ -16,8 +16,12 @@ services:
 
   game-station:
     image: airtek/game-station-${GAME:-supertuxkart}
+    pull_policy: never
     build:
       context: ../games/${GAME:-supertuxkart}
+      pull: false
+      additional_contexts:
+        "airtek/game-station-runtime:latest": "service:runtime"
       args:
         RUNTIME_IMAGE: airtek/game-station-runtime:latest
     network_mode: host
