@@ -57,7 +57,7 @@ class Settings:
             http_port=int(os.environ.get("STATION_HTTP_PORT", "8090")),
             display=os.environ.get("STATION_DISPLAY", ":99"),
             size=size,
-            fps=os.environ.get("STATION_FPS", "60"),
+            fps=os.environ.get("STATION_FPS", "0"),
             library_root=os.environ.get("LIBRARY_ROOT", "/opt/station-library"),
             cache_root=os.environ.get("CACHE_ROOT", "/cache"),
             idle_timeout_s=float(os.environ.get("IDLE_TIMEOUT_S", "300")),

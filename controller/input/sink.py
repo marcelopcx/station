@@ -1,6 +1,7 @@
-"""Sink del DataChannel `input`.
+"""Sink del DataChannel `input` (UDP unreliable + historial).
 
-Rutea type=3 a N pads uinput, type=1/2 a XTEST si el manifiesto lo pide.
+Aplica fotografías en orden de seq. Si faltó un paquete, el actual trae
+las 3 anteriores y se reconstruye el hueco sin retransmisión.
 """
 
 from __future__ import annotations
@@ -10,14 +11,12 @@ import time
 from typing import Optional
 
 from controller.input.gamepad import PadDevice, open_pads
-from controller.input.packet import (
-    POINTER_ABS,
-    InputEvent,
-    parse_packet,
-)
+from controller.input.packet import PadSnapshot, Snapshot, new_snapshots, parse_datagram
 from controller.input.x11 import X11Injector
 
 log = logging.getLogger("game-station.input")
+
+_REST_AXES = (0, 0, 0, 0, 0, 0)
 
 
 class InputSink:
@@ -29,6 +28,12 @@ class InputSink:
         self._keyboard = False
         self._mouse = False
         self.last_input_monotonic: Optional[float] = None
+        self.last_video_frame: int = 0
+        self._applied_seq = -1
+        self._last_keys: set[int] = set()
+        self._last_buttons = 0
+        self._pad_live: set[int] = set()
+        self._healed = 0
 
     def open(
         self,
@@ -44,11 +49,17 @@ class InputSink:
         self._keyboard = bool(keyboard)
         self._mouse = bool(mouse)
         self.last_input_monotonic = None
+        self.last_video_frame = 0
+        self._applied_seq = -1
+        self._last_keys = set()
+        self._last_buttons = 0
+        self._pad_live = set()
+        self._healed = 0
         self._pads = open_pads(pads)
         if keyboard or mouse:
             self._x11 = X11Injector(display, width, height)
         log.info(
-            "input open pads=%s keyboard=%s mouse=%s display=%s",
+            "input open protocol=udp-history pads=%s keyboard=%s mouse=%s display=%s",
             pads,
             keyboard,
             mouse,
@@ -58,77 +69,91 @@ class InputSink:
     def close(self) -> None:
         self.last_input_monotonic = None
         for pad in self._pads:
+            pad.apply_state(0, _REST_AXES)
             pad.close()
         self._pads = []
+        self._pad_live.clear()
         if self._x11 is not None:
             self._x11.close()
             self._x11 = None
         self._keyboard = False
         self._mouse = False
+        self._applied_seq = -1
+        self._last_keys = set()
+        self._last_buttons = 0
 
     def handle(self, data: bytes) -> None:
-        ev = parse_packet(data)
-        if ev is None:
-            log.warning("input: paquete inválido len=%s", len(data))
+        snaps = parse_datagram(data)
+        if snaps is None:
+            log.warning("input: datagrama inválido len=%s", len(data))
+            return
+        pending = new_snapshots(snaps, self._applied_seq)
+        if not pending:
             return
         self.last_input_monotonic = time.monotonic()
-        if ev.is_pad_button or ev.is_pad_axis:
-            self._pad(ev)
-            return
-        if ev.is_key:
-            self._key(ev)
-            return
-        if ev.is_pointer_button or ev.is_pointer_move or ev.is_pointer_wheel:
-            self._pointer(ev)
+        first = pending[0].seq
+        if self._applied_seq >= 0:
+            gap = (first - self._applied_seq) & 0xFFFF
+            if gap > 1:
+                self._healed += gap - 1
+                log.info(
+                    "input heal gap=%s seq=%s..%s frame=%s",
+                    gap - 1,
+                    self._applied_seq,
+                    pending[-1].seq,
+                    pending[-1].frame_id,
+                )
+        for snap in pending:
+            self._apply(snap)
+            self._applied_seq = snap.seq
+            self.last_video_frame = snap.frame_id
 
-    def _pad(self, ev: InputEvent) -> None:
-        slot = ev.pad_index
-        if slot < 0 or slot >= len(self._pads):
-            log.info(
-                "input pad=%s %s code=%s extra=%s (sin dispositivo)",
-                slot,
-                "axis" if ev.is_pad_axis else ("down" if ev.pressed else "up"),
-                ev.control,
-                ev.extra,
-            )
-            return
-        pad = self._pads[slot]
-        if ev.is_pad_button:
-            log.debug(
-                "input pad=%s %s code=%s",
-                slot,
-                "down" if ev.pressed else "up",
-                ev.control,
-            )
-            pad.button(ev.control, 1 if ev.pressed else 0)
-            return
-        log.debug("input pad=%s axis code=%s extra=%s", slot, ev.control, ev.extra)
-        pad.axis(ev.control, ev.extra)
+    def _apply(self, snap: Snapshot) -> None:
+        if snap.has_pads:
+            self._pads_to(snap.pads)
+        if snap.has_keyboard and self._keyboard:
+            self._keys_to(snap.keys)
+        if snap.has_mouse and self._mouse:
+            self._mouse_to(snap)
 
-    def _key(self, ev: InputEvent) -> None:
-        if not self._keyboard:
-            return
-        log.debug("input key %s code=%s", "down" if ev.pressed else "up", ev.control)
-        if self._x11 is None:
-            return
-        self._x11.key(ev.control, ev.pressed)
+    def _pads_to(self, pads: dict[int, PadSnapshot]) -> None:
+        live: set[int] = set()
+        for slot, pad_snap in pads.items():
+            if slot < 0 or slot >= len(self._pads):
+                continue
+            self._pads[slot].apply_state(pad_snap.buttons, pad_snap.axes)
+            live.add(slot)
+        for slot in self._pad_live - live:
+            if slot < len(self._pads):
+                self._pads[slot].apply_state(0, _REST_AXES)
+        self._pad_live = live
 
-    def _pointer(self, ev: InputEvent) -> None:
-        if not self._mouse or self._x11 is None:
+    def _keys_to(self, held: set[int]) -> None:
+        x11 = self._x11
+        if x11 is None:
+            self._last_keys = set(held)
             return
-        if ev.is_pointer_button:
-            log.debug(
-                "input mouse %s button=%s",
-                "down" if ev.pressed else "up",
-                ev.control,
-            )
-            self._x11.button(ev.control, ev.pressed)
+        for code in self._last_keys - held:
+            x11.key(code, False)
+        for code in held - self._last_keys:
+            x11.key(code, True)
+        self._last_keys = set(held)
+
+    def _mouse_to(self, snap: Snapshot) -> None:
+        x11 = self._x11
+        if x11 is None:
+            self._last_buttons = snap.mouse_buttons
             return
-        if ev.is_pointer_wheel:
-            self._x11.wheel(ev.extra)
-            return
-        x, y = ev.unpack_xy()
-        if ev.control == POINTER_ABS:
-            self._x11.move_abs(x, y)
-            return
-        self._x11.move_rel(x, y)
+        if snap.mouse_abs:
+            x11.move_abs(snap.mouse_x, snap.mouse_y)
+        elif snap.mouse_x or snap.mouse_y:
+            x11.move_rel(snap.mouse_x, snap.mouse_y)
+        changed = self._last_buttons ^ snap.mouse_buttons
+        if changed:
+            for bit in range(5):
+                if not (changed & (1 << bit)):
+                    continue
+                x11.button(bit, bool(snap.mouse_buttons & (1 << bit)))
+            self._last_buttons = snap.mouse_buttons
+        if snap.wheel:
+            x11.wheel(snap.wheel)

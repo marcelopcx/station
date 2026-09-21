@@ -27,7 +27,12 @@ from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame
 
-from controller.webrtc.encode import apply as apply_encoder, codec_name
+from controller.webrtc.encode import (
+    apply as apply_encoder,
+    capture_fps,
+    codec_name,
+    video_fps,
+)
 
 log = logging.getLogger("game-station.webrtc.media")
 
@@ -35,7 +40,6 @@ apply_encoder()
 
 SMPTE_LAVFI = "smptebars=size=1280x720:rate=60"
 CAPTURE_SIZE = os.environ.get("STATION_SIZE", "1280x720")
-CAPTURE_FPS = os.environ.get("STATION_FPS", "60")
 PULSE_SOURCE = os.environ.get("STATION_PULSE_SOURCE", "game.monitor")
 
 _AUDIO_RATE = 48000
@@ -224,7 +228,7 @@ class SmpteBarsSource:
     def start(self) -> None:
         if self._player is not None:
             return
-        log.info("encoder=%s source=smptebars 1280x720@%s", codec_name(), CAPTURE_FPS)
+        log.info("encoder=%s source=smptebars 1280x720@60", codec_name())
         self._player = MediaPlayer(SMPTE_LAVFI, format="lavfi")
 
     def subscribe_video(self):
@@ -406,17 +410,18 @@ class DisplayCaptureSource:
     def start(self) -> None:
         if self._video is not None:
             return
+        fps = str(capture_fps())
         log.info(
             "encoder=%s source=x11grab display=%s %s@%s",
             codec_name(),
             self._display,
             CAPTURE_SIZE,
-            CAPTURE_FPS,
+            "unlimited" if video_fps() == 0 else fps,
         )
         track = X11GrabTrack(
             self._display,
             size=CAPTURE_SIZE,
-            fps=CAPTURE_FPS,
+            fps=fps,
             draw_mouse=self._draw_mouse,
         )
         track.start()

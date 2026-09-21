@@ -1,7 +1,7 @@
-"""H.264 60 fps y bitrate alto. NVENC si el GPU está; si no, libx264 zerolatency.
+"""H.264 a bitrate alto. NVENC si el GPU está; si no, libx264 zerolatency.
 
-aiortc trae VP8 a 500 kb/s y H.264 a 30 fps / 1 Mb/s. Eso es el lag y la
-nieve, no el Grace Blackwell.
+Sin tope de 60 fps: captura y encode van tan rápido como den el GPU y x11grab.
+aiortc trae VP8 a 500 kb/s y H.264 a 30 fps / 1 Mb/s de fábrica.
 """
 
 from __future__ import annotations
@@ -20,13 +20,33 @@ _patched = False
 _prefer_h264 = True
 
 
+_UNLIMITED_CAPTURE = 240
+_UNLIMITED_ENCODE = 360
+
+
 def video_fps() -> int:
-    raw = os.environ.get("STATION_FPS", "60").strip() or "60"
+    """0 = sin límite. Un número positivo fija captura y encode a ese tope."""
+    raw = os.environ.get("STATION_FPS", "0").strip()
+    if not raw or raw.lower() in ("0", "unlimited", "max"):
+        return 0
     try:
-        fps = int(raw)
+        return max(0, int(raw))
     except ValueError:
-        fps = 60
-    return max(30, min(120, fps))
+        return 0
+
+
+def capture_fps() -> int:
+    fps = video_fps()
+    return fps if fps > 0 else _UNLIMITED_CAPTURE
+
+
+def encoder_fps() -> int:
+    fps = video_fps()
+    return fps if fps > 0 else _UNLIMITED_ENCODE
+
+
+def _gop(fps: int) -> int:
+    return max(30, min(int(fps), 120))
 
 
 def video_bitrate() -> int:
@@ -51,7 +71,7 @@ def apply() -> None:
     global _patched, _prefer_h264
     if _patched:
         return
-    fps = video_fps()
+    fps = encoder_fps()
     bitrate = video_bitrate()
     try:
         from aiortc.codecs import h264, vpx
@@ -80,7 +100,7 @@ def apply() -> None:
     log.info(
         "webrtc encode ready prefer=%s fps=%s bitrate=%s",
         "h264" if _prefer_h264 else "vp8",
-        fps,
+        "unlimited" if video_fps() == 0 else fps,
         bitrate,
     )
 
@@ -161,7 +181,7 @@ def _make_nvenc(width: int, height: int, bitrate: int, fps: int) -> VideoCodecCo
     ctx = av.CodecContext.create("h264_nvenc", "w")
     _fill_ctx(ctx, width, height, bitrate, fps)
     ctx.profile = "Baseline"
-    ctx.gop_size = fps
+    ctx.gop_size = _gop(fps)
     ctx.options = {
         "preset": "p1",
         "tune": "ull",
@@ -178,14 +198,15 @@ def _make_libx264(width: int, height: int, bitrate: int, fps: int) -> VideoCodec
     ctx = av.CodecContext.create("libx264", "w")
     _fill_ctx(ctx, width, height, bitrate, fps)
     ctx.profile = "Baseline"
-    ctx.gop_size = fps
+    gop = _gop(fps)
+    ctx.gop_size = gop
     ctx.options = {
         "preset": "ultrafast",
         "tune": "zerolatency",
         "level": "40",
         "bf": "0",
-        "g": str(fps),
-        "keyint_min": str(fps),
+        "g": str(gop),
+        "keyint_min": str(gop),
         "scenecut": "0",
         "repeat-headers": "1",
     }
