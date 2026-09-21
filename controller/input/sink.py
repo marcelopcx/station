@@ -1,17 +1,19 @@
-"""Sink del DataChannel `input` (UDP unreliable + historial).
+"""Sink del DataChannel `input`.
 
-Aplica fotografías en orden de seq. Si faltó un paquete, el actual trae
-las 3 anteriores y se reconstruye el hueco sin retransmisión.
+El pad va a uinput en su hilo. X11 (teclado/ratón) va en otro. Si el
+DataChannel se atrasa, solo gana el snapshot más nuevo: analog no espera
+un flush de X ni un historial viejo.
 """
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Optional
 
 from controller.input.gamepad import PadDevice, open_pads
-from controller.input.packet import PadSnapshot, Snapshot, new_snapshots, parse_datagram
+from controller.input.packet import PadSnapshot, Snapshot, new_snapshots, parse_datagram, seq_newer
 from controller.input.x11 import X11Injector
 
 log = logging.getLogger("game-station.input")
@@ -30,10 +32,20 @@ class InputSink:
         self.last_input_monotonic: Optional[float] = None
         self.last_video_frame: int = 0
         self._applied_seq = -1
-        self._last_keys: set[int] = set()
-        self._last_buttons = 0
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._pad_job: Optional[dict[int, PadSnapshot]] = None
         self._pad_live: set[int] = set()
-        self._healed = 0
+        self._keys: Optional[set[int]] = None
+        self._buttons: Optional[int] = None
+        self._abs: Optional[tuple[int, int]] = None
+        self._rel_x = 0
+        self._rel_y = 0
+        self._wheel = 0
+        self._x11_dirty = False
+        self._pad_thread: Optional[threading.Thread] = None
+        self._x11_thread: Optional[threading.Thread] = None
 
     def open(
         self,
@@ -51,15 +63,23 @@ class InputSink:
         self.last_input_monotonic = None
         self.last_video_frame = 0
         self._applied_seq = -1
-        self._last_keys = set()
-        self._last_buttons = 0
-        self._pad_live = set()
-        self._healed = 0
+        self._reset_jobs()
         self._pads = open_pads(pads)
         if keyboard or mouse:
             self._x11 = X11Injector(display, width, height)
+        self._stop = threading.Event()
+        if self._pads:
+            self._pad_thread = threading.Thread(
+                target=self._run_pads, name="input-pads", daemon=True
+            )
+            self._pad_thread.start()
+        if self._x11 is not None:
+            self._x11_thread = threading.Thread(
+                target=self._run_x11, name="input-x11", daemon=True
+            )
+            self._x11_thread.start()
         log.info(
-            "input open protocol=udp-history pads=%s keyboard=%s mouse=%s display=%s",
+            "input open protocol=udp-latest pads=%s keyboard=%s mouse=%s display=%s",
             pads,
             keyboard,
             mouse,
@@ -67,6 +87,17 @@ class InputSink:
         )
 
     def close(self) -> None:
+        self._stop.set()
+        with self._cond:
+            self._cond.notify_all()
+        pad_thread = self._pad_thread
+        x11_thread = self._x11_thread
+        self._pad_thread = None
+        self._x11_thread = None
+        if pad_thread is not None and pad_thread.is_alive():
+            pad_thread.join(timeout=2)
+        if x11_thread is not None and x11_thread.is_alive():
+            x11_thread.join(timeout=2)
         self.last_input_monotonic = None
         for pad in self._pads:
             pad.apply_state(0, _REST_AXES)
@@ -79,44 +110,71 @@ class InputSink:
         self._keyboard = False
         self._mouse = False
         self._applied_seq = -1
-        self._last_keys = set()
-        self._last_buttons = 0
+        self._reset_jobs()
 
     def handle(self, data: bytes) -> None:
         snaps = parse_datagram(data)
         if snaps is None:
             log.warning("input: datagrama inválido len=%s", len(data))
             return
+        latest = snaps[-1]
+        if self._applied_seq >= 0 and not seq_newer(latest.seq, self._applied_seq):
+            return
         pending = new_snapshots(snaps, self._applied_seq)
         if not pending:
             return
-        self.last_input_monotonic = time.monotonic()
-        first = pending[0].seq
-        if self._applied_seq >= 0:
-            gap = (first - self._applied_seq) & 0xFFFF
-            if gap > 1:
-                self._healed += gap - 1
-                log.info(
-                    "input heal gap=%s seq=%s..%s frame=%s",
-                    gap - 1,
-                    self._applied_seq,
-                    pending[-1].seq,
-                    pending[-1].frame_id,
-                )
+        latest = pending[-1]
+        rel_x = 0
+        rel_y = 0
+        wheel = 0
         for snap in pending:
-            self._apply(snap)
-            self._applied_seq = snap.seq
-            self.last_video_frame = snap.frame_id
+            if not snap.has_mouse:
+                continue
+            if not snap.mouse_abs:
+                rel_x += snap.mouse_x
+                rel_y += snap.mouse_y
+            wheel += snap.wheel
+        with self._cond:
+            self._applied_seq = latest.seq
+            self.last_video_frame = latest.frame_id
+            self.last_input_monotonic = time.monotonic()
+            if latest.has_pads:
+                self._pad_job = latest.pads
+            if latest.has_keyboard and self._keyboard:
+                self._keys = set(latest.keys)
+                self._x11_dirty = True
+            if latest.has_mouse and self._mouse:
+                if latest.mouse_abs:
+                    self._abs = (latest.mouse_x, latest.mouse_y)
+                self._rel_x += rel_x
+                self._rel_y += rel_y
+                self._wheel += wheel
+                self._buttons = latest.mouse_buttons
+                self._x11_dirty = True
+            self._cond.notify_all()
 
-    def _apply(self, snap: Snapshot) -> None:
-        if snap.has_pads:
-            self._pads_to(snap.pads)
-        if snap.has_keyboard and self._keyboard:
-            self._keys_to(snap.keys)
-        if snap.has_mouse and self._mouse:
-            self._mouse_to(snap)
+    def _reset_jobs(self) -> None:
+        self._pad_job = None
+        self._keys = None
+        self._buttons = None
+        self._abs = None
+        self._rel_x = 0
+        self._rel_y = 0
+        self._wheel = 0
+        self._x11_dirty = False
 
-    def _pads_to(self, pads: dict[int, PadSnapshot]) -> None:
+    def _run_pads(self) -> None:
+        while not self._stop.is_set():
+            with self._cond:
+                while self._pad_job is None and not self._stop.is_set():
+                    self._cond.wait(timeout=0.25)
+                job = self._pad_job
+                self._pad_job = None
+            if job is None:
+                continue
+            self._emit_pads(job)
+
+    def _emit_pads(self, pads: dict[int, PadSnapshot]) -> None:
         live: set[int] = set()
         for slot, pad_snap in pads.items():
             if slot < 0 or slot >= len(self._pads):
@@ -128,32 +186,30 @@ class InputSink:
                 self._pads[slot].apply_state(0, _REST_AXES)
         self._pad_live = live
 
-    def _keys_to(self, held: set[int]) -> None:
-        x11 = self._x11
-        if x11 is None:
-            self._last_keys = set(held)
-            return
-        for code in self._last_keys - held:
-            x11.key(code, False)
-        for code in held - self._last_keys:
-            x11.key(code, True)
-        self._last_keys = set(held)
-
-    def _mouse_to(self, snap: Snapshot) -> None:
-        x11 = self._x11
-        if x11 is None:
-            self._last_buttons = snap.mouse_buttons
-            return
-        if snap.mouse_abs:
-            x11.move_abs(snap.mouse_x, snap.mouse_y)
-        elif snap.mouse_x or snap.mouse_y:
-            x11.move_rel(snap.mouse_x, snap.mouse_y)
-        changed = self._last_buttons ^ snap.mouse_buttons
-        if changed:
-            for bit in range(5):
-                if not (changed & (1 << bit)):
+    def _run_x11(self) -> None:
+        while not self._stop.is_set():
+            with self._cond:
+                while not self._x11_dirty and not self._stop.is_set():
+                    self._cond.wait(timeout=0.25)
+                if not self._x11_dirty:
                     continue
-                x11.button(bit, bool(snap.mouse_buttons & (1 << bit)))
-            self._last_buttons = snap.mouse_buttons
-        if snap.wheel:
-            x11.wheel(snap.wheel)
+                abs_pt = self._abs
+                rel = (self._rel_x, self._rel_y)
+                wheel = self._wheel
+                buttons = self._buttons
+                keys = self._keys
+                self._abs = None
+                self._rel_x = 0
+                self._rel_y = 0
+                self._wheel = 0
+                self._x11_dirty = False
+            x11 = self._x11
+            if x11 is None:
+                continue
+            x11.inject(
+                abs_pt=abs_pt if self._mouse else None,
+                rel=rel if self._mouse else (0, 0),
+                wheel=wheel if self._mouse else 0,
+                buttons=buttons if self._mouse else None,
+                keys=keys if self._keyboard else None,
+            )

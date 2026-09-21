@@ -36,6 +36,9 @@ class X11Injector:
         self._failed = not _X11
         self._tries = 0
         self._lock = threading.Lock()
+        self._keys: set[int] = set()
+        self._buttons = 0
+        self._abs: Optional[tuple[int, int]] = None
         if not _X11:
             log.warning("input_backend=log (python-xlib no instalado)")
 
@@ -45,9 +48,24 @@ class X11Injector:
             self._dpy = None
             if dpy is not None:
                 try:
+                    if X is not None:
+                        for code in self._keys:
+                            dpy.xtest_fake_input(X.KeyRelease, code + _LINUX_TO_X)
+                        for bit in range(5):
+                            if self._buttons & (1 << bit):
+                                xbtn = _dom_to_x_button(bit)
+                                if xbtn is not None:
+                                    dpy.xtest_fake_input(X.ButtonRelease, xbtn)
+                        dpy.flush()
+                except Exception:
+                    pass
+                try:
                     dpy.close()
                 except Exception:
                     pass
+            self._keys.clear()
+            self._buttons = 0
+            self._abs = None
 
     def key(self, linux_code: int, pressed: bool) -> None:
         if linux_code <= 0:
@@ -85,14 +103,66 @@ class X11Injector:
             dpy.flush()
 
     def move_abs(self, x: int, y: int) -> None:
-        x = max(0, min(self._width - 1, x))
-        y = max(0, min(self._height - 1, y))
+        self.inject(abs_pt=(x, y))
+
+    def inject(
+        self,
+        *,
+        abs_pt: Optional[tuple[int, int]] = None,
+        rel: tuple[int, int] = (0, 0),
+        wheel: int = 0,
+        buttons: Optional[int] = None,
+        keys: Optional[set[int]] = None,
+    ) -> None:
+        """Un solo flush. No hace X11 si no cambió nada."""
         with self._lock:
             dpy = self._conn()
             if dpy is None or X is None:
                 return
-            dpy.xtest_fake_input(X.MotionNotify, 0, x=x, y=y)
-            dpy.flush()
+            wrote = False
+            if abs_pt is not None:
+                x = max(0, min(self._width - 1, abs_pt[0]))
+                y = max(0, min(self._height - 1, abs_pt[1]))
+                if self._abs != (x, y):
+                    dpy.xtest_fake_input(X.MotionNotify, 0, x=x, y=y)
+                    self._abs = (x, y)
+                    wrote = True
+            dx, dy = rel
+            if dx or dy:
+                dpy.xtest_fake_input(X.MotionNotify, 1, x=int(dx), y=int(dy))
+                wrote = True
+            if buttons is not None:
+                mask = buttons & 0x1F
+                changed = self._buttons ^ mask
+                if changed:
+                    for bit in range(5):
+                        if not (changed & (1 << bit)):
+                            continue
+                        xbtn = _dom_to_x_button(bit)
+                        if xbtn is None:
+                            continue
+                        kind = X.ButtonPress if mask & (1 << bit) else X.ButtonRelease
+                        dpy.xtest_fake_input(kind, xbtn)
+                    self._buttons = mask
+                    wrote = True
+            if wheel:
+                xbtn = 4 if wheel > 0 else 5
+                n = min(8, abs(int(wheel)))
+                for _ in range(n):
+                    dpy.xtest_fake_input(X.ButtonPress, xbtn)
+                    dpy.xtest_fake_input(X.ButtonRelease, xbtn)
+                wrote = True
+            if keys is not None:
+                want = {code for code in keys if code > 0}
+                for code in self._keys - want:
+                    dpy.xtest_fake_input(X.KeyRelease, code + _LINUX_TO_X)
+                    wrote = True
+                for code in want - self._keys:
+                    dpy.xtest_fake_input(X.KeyPress, code + _LINUX_TO_X)
+                    wrote = True
+                self._keys = want
+            if wrote:
+                dpy.flush()
 
     def wheel(self, ticks: int) -> None:
         if ticks == 0:
