@@ -170,7 +170,7 @@ class WebrtcSession:
 
         @pc.on("datachannel")
         def on_datachannel(channel) -> None:
-            log.info("datachannel=%s", channel.label)
+            log.info("datachannel=%s protocol=udp-latest", channel.label)
             if channel.label != "input":
                 return
 

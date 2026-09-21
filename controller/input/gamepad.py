@@ -10,17 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Optional
-
-from controller.input.packet import (
-    ACTION_AXIS,
-    ACTION_DOWN,
-    ACTION_UP,
-    TYPE_KEY,
-    TYPE_PAD,
-    InputEvent,
-    parse_packet,
-)
+from typing import Any, Optional, Sequence
 
 log = logging.getLogger("game-station.input")
 
@@ -87,20 +77,25 @@ except ImportError:
 def _pad_maps() -> tuple[dict[int, int], dict[int, int], Any, Any] | None:
     if not _EVDEV or _e is None or AbsInfo is None:
         return None
+    # Índices joydev = orden del código evdev, no el orden de este dict.
+    # BTN_X del kernel es BTN_NORTH (0x133) y BTN_Y es BTN_WEST (0x134).
+    # Sin BTN_TL2/TR2 los gatillos van solo por eje y Select/Start no se corren.
+    # Queda igual que _SDL_BINDINGS (a:b0 … rightstick:b10).
+    def code(name: str, fallback: int) -> int:
+        return int(getattr(_e, name, fallback))
+
     btn = {
-        0: _e.BTN_SOUTH,
-        1: _e.BTN_EAST,
-        2: _e.BTN_WEST,
-        3: _e.BTN_NORTH,
-        4: _e.BTN_TL,
-        5: _e.BTN_TR,
-        6: _e.BTN_TL2,
-        7: _e.BTN_TR2,
-        8: _e.BTN_SELECT,
-        9: _e.BTN_START,
-        10: _e.BTN_THUMBL,
-        11: _e.BTN_THUMBR,
-        16: _e.BTN_MODE,
+        0: code("BTN_SOUTH", 0x130),  # A  b0
+        1: code("BTN_EAST", 0x131),  # B  b1
+        2: code("BTN_NORTH", 0x133),  # X  b2
+        3: code("BTN_WEST", 0x134),  # Y  b3
+        4: code("BTN_TL", 0x136),  # LB b4
+        5: code("BTN_TR", 0x137),  # RB b5
+        8: code("BTN_SELECT", 0x13A),  # View b6
+        9: code("BTN_START", 0x13B),  # Menu b7
+        10: code("BTN_THUMBL", 0x13D),  # LS b9
+        11: code("BTN_THUMBR", 0x13E),  # RS b10
+        16: code("BTN_MODE", 0x13C),  # Guide b8
     }
     abs_map = {
         0: _e.ABS_X,
@@ -115,6 +110,12 @@ def _pad_maps() -> tuple[dict[int, int], dict[int, int], Any, Any] | None:
     return btn, abs_map, stick, trigger
 
 
+def _hat_from_mask(mask: int) -> tuple[int, int]:
+    y = -1 if mask & (1 << 12) else (1 if mask & (1 << 13) else 0)
+    x = -1 if mask & (1 << 14) else (1 if mask & (1 << 15) else 0)
+    return x, y
+
+
 class PadDevice:
     """Un pad Xbox 360 virtual."""
 
@@ -125,6 +126,9 @@ class PadDevice:
         self._abs: dict[int, int] = {}
         self._hat_x = 0
         self._hat_y = 0
+        self._prev_mask = 0
+        self._prev_axes = [0, 0, 0, 0, 0, 0]
+        self._triggers: set[int] = set()
 
     def open(self) -> bool:
         maps = _pad_maps()
@@ -133,6 +137,8 @@ class PadDevice:
         btn, abs_map, stick, trigger = maps
         self._btn = btn
         self._abs = abs_map
+        if _e is not None:
+            self._triggers = {_e.ABS_Z, _e.ABS_RZ}
         cap = {
             _e.EV_KEY: list(btn.values()),
             _e.EV_ABS: [
@@ -178,43 +184,61 @@ class PadDevice:
         if ui is not None:
             ui.close()
 
-    def button(self, code: int, value: int) -> None:
+    def apply_state(self, mask: int, axes: Sequence[int]) -> None:
         if self._ui is None or _e is None:
             return
-        if code in (12, 13, 14, 15):
-            self._hat(code, value)
-            return
-        btn = self._btn.get(code)
-        if btn is None:
-            return
-        self._ui.write(_e.EV_KEY, btn, value)
-        self._ui.syn()
+        mask = int(mask) & 0x1FFFF
+        wrote = False
+        for code in range(17):
+            if code in (12, 13, 14, 15):
+                continue
+            down = 1 if (mask >> code) & 1 else 0
+            prev = 1 if (self._prev_mask >> code) & 1 else 0
+            if down == prev:
+                continue
+            btn = self._btn.get(code)
+            if btn is None:
+                continue
+            self._ui.write(_e.EV_KEY, btn, down)
+            wrote = True
+        hat_x, hat_y = _hat_from_mask(mask)
+        if hat_x != self._hat_x:
+            self._ui.write(_e.EV_ABS, _e.ABS_HAT0X, hat_x)
+            self._hat_x = hat_x
+            wrote = True
+        if hat_y != self._hat_y:
+            self._ui.write(_e.EV_ABS, _e.ABS_HAT0Y, hat_y)
+            self._hat_y = hat_y
+            wrote = True
+        n = min(6, len(axes))
+        for i in range(n):
+            axis = self._abs.get(i)
+            if axis is None:
+                continue
+            lo, hi = (0, 32767) if axis in self._triggers else (-32767, 32767)
+            val = max(lo, min(hi, int(axes[i])))
+            if self._prev_axes[i] == val:
+                continue
+            self._ui.write(_e.EV_ABS, axis, val)
+            self._prev_axes[i] = val
+            wrote = True
+        if wrote:
+            self._ui.syn()
+        self._prev_mask = mask
+
+    def button(self, code: int, value: int) -> None:
+        mask = self._prev_mask
+        if value:
+            mask |= 1 << code
+        else:
+            mask &= ~(1 << code)
+        self.apply_state(mask, self._prev_axes)
 
     def axis(self, code: int, extra: int) -> None:
-        if self._ui is None or _e is None:
-            return
-        axis = self._abs.get(code)
-        if axis is None:
-            return
-        lo, hi = (0, 32767) if axis in (_e.ABS_Z, _e.ABS_RZ) else (-32767, 32767)
-        self._ui.write(_e.EV_ABS, axis, max(lo, min(hi, extra)))
-        self._ui.syn()
-
-    def _hat(self, code: int, value: int) -> None:
-        if self._ui is None or _e is None:
-            return
-        pressed = value != 0
-        if code == 12:
-            self._hat_y = -1 if pressed else 0
-        elif code == 13:
-            self._hat_y = 1 if pressed else 0
-        elif code == 14:
-            self._hat_x = -1 if pressed else 0
-        elif code == 15:
-            self._hat_x = 1 if pressed else 0
-        self._ui.write(_e.EV_ABS, _e.ABS_HAT0X, self._hat_x)
-        self._ui.write(_e.EV_ABS, _e.ABS_HAT0Y, self._hat_y)
-        self._ui.syn()
+        axes = list(self._prev_axes)
+        if 0 <= code < 6:
+            axes[code] = extra
+        self.apply_state(self._prev_mask, axes)
 
 
 def open_pads(n: int) -> list[PadDevice]:
@@ -232,17 +256,9 @@ def open_pads(n: int) -> list[PadDevice]:
     return pads
 
 
-# Reexportados: el parser vive en packet.py; el sink público en sink.py.
 __all__ = [
-    "ACTION_AXIS",
-    "ACTION_DOWN",
-    "ACTION_UP",
-    "InputEvent",
     "PadDevice",
     "SDL_GAMECONTROLLER_MAPPING",
-    "TYPE_KEY",
-    "TYPE_PAD",
     "open_pads",
-    "parse_packet",
     "sdl_controller_config",
 ]
