@@ -10,16 +10,19 @@ La elección display vs SMPTE la hace el manifiesto (`needs.display`), no un gam
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import queue
 import shutil
 import subprocess
 import threading
+import time
 from fractions import Fraction
 from typing import Optional, Union
 
-from aiortc import AudioStreamTrack
+import av
+from aiortc import AudioStreamTrack, VideoStreamTrack
 from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame
@@ -36,6 +39,49 @@ _AUDIO_SAMPLES = 960  # 20 ms
 _AUDIO_CH = 2
 _AUDIO_BYTES = _AUDIO_SAMPLES * 2 * _AUDIO_CH  # stereo s16le
 _AUDIO_TIME_BASE = Fraction(1, _AUDIO_RATE)
+_VIDEO_CLOCK = 90000
+_VIDEO_TIME_BASE = Fraction(1, _VIDEO_CLOCK)
+
+_X11GRAB_OPTIONS = {
+    "probesize": "32",
+    "analyzeduration": "0",
+    "fflags": "nobuffer",
+    "flags": "low_delay",
+    "thread_queue_size": "1",
+    "use_wallclock_as_timestamps": "1",
+}
+
+
+def _tune_vp8_encoder() -> None:
+    """libvpx: menos denoise y más speed. El codec de aiortc ya es realtime."""
+    try:
+        from aiortc.codecs.vpx import Vp8Encoder
+    except ImportError:
+        return
+    if getattr(Vp8Encoder, "_airtek_tuned", False):
+        return
+
+    orig = Vp8Encoder.encode
+
+    def encode(self, frame, force_keyframe=False):  # type: ignore[no-untyped-def]
+        payloads, timestamp = orig(self, frame, force_keyframe)
+        codec = getattr(self, "codec", None)
+        if codec is not None and not getattr(self, "_airtek_opts", False):
+            try:
+                opts = dict(codec.options)
+                opts["cpu-used"] = "8"
+                opts["noise-sensitivity"] = "0"
+                codec.options = opts
+            except Exception:
+                pass
+            self._airtek_opts = True
+        return payloads, timestamp
+
+    Vp8Encoder.encode = encode  # type: ignore[method-assign]
+    Vp8Encoder._airtek_tuned = True  # type: ignore[attr-defined]
+
+
+_tune_vp8_encoder()
 
 
 class PulseAudioTrack(AudioStreamTrack):
@@ -45,7 +91,7 @@ class PulseAudioTrack(AudioStreamTrack):
         super().__init__()
         self._source = source
         self._proc: Optional[subprocess.Popen[bytes]] = None
-        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=10)
+        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=2)
         self._thread: Optional[threading.Thread] = None
         self._pts = 0
         self._heard = False
@@ -160,7 +206,7 @@ def _capture_candidates(source: str) -> list[tuple[list[str], str]]:
                     f"--rate={_AUDIO_RATE}",
                     f"--channels={_AUDIO_CH}",
                     f"--device={source}",
-                    "--latency-msec=20",
+                    "--latency-msec=10",
                 ],
                 "parec",
             )
@@ -230,6 +276,148 @@ class SmpteBarsSource:
             player.audio.stop()
 
 
+class X11GrabTrack(VideoStreamTrack):
+    """x11grab en un hilo, cola de 1 frame: el encode siempre ve el último.
+
+    MediaPlayer de aiortc encola sin límite. Si VP8 software va más lento que
+    la captura, el jugador ve el pasado (input lag).
+    """
+
+    def __init__(self, display: str, *, size: str, fps: str, draw_mouse: bool) -> None:
+        super().__init__()
+        self._display = display
+        self._size = size
+        self._fps = fps
+        self._draw_mouse = draw_mouse
+        self._lock = threading.Lock()
+        self._has = threading.Event()
+        self._latest: object | None = None
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._container: Optional[av.container.InputContainer] = None
+        self._origin: Optional[float] = None
+        self._logged = False
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        options = {
+            "video_size": self._size,
+            "framerate": self._fps,
+            "draw_mouse": "1" if self._draw_mouse else "0",
+            **_X11GRAB_OPTIONS,
+        }
+        container = av.open(
+            self._display, format="x11grab", mode="r", options=options
+        )
+        self._container = container
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, args=(container,), name="x11grab", daemon=True
+        )
+        self._thread.start()
+
+    def _run(self, container: av.container.InputContainer) -> None:
+        streams = [s for s in container.streams if s.type == "video"]
+        if not streams:
+            log.warning("x11grab sin stream de video display=%s", self._display)
+            try:
+                container.close()
+            except Exception:
+                pass
+            return
+        decode = container.decode(*streams)
+        try:
+            while not self._stop.is_set():
+                try:
+                    frame = next(decode)
+                except StopIteration:
+                    break
+                except av.FFmpegError as exc:
+                    if getattr(exc, "errno", None) == errno.EAGAIN:
+                        time.sleep(0.001)
+                        continue
+                    if self._stop.is_set():
+                        break
+                    log.warning("x11grab decode: %s", exc)
+                    break
+                except Exception as exc:
+                    if self._stop.is_set():
+                        break
+                    log.warning("x11grab: %s", exc)
+                    break
+                if frame is None:
+                    continue
+                if not self._logged:
+                    self._logged = True
+                    log.info(
+                        "x11grab frame=%sx%s fmt=%s",
+                        frame.width,
+                        frame.height,
+                        frame.format.name if frame.format else "?",
+                    )
+                try:
+                    frame = frame.reformat(format="yuv420p")
+                except Exception as exc:
+                    log.warning("x11grab reformat: %s", exc)
+                    continue
+                self._push(frame)
+        finally:
+            self._container = None
+            try:
+                container.close()
+            except Exception:
+                pass
+
+    def _push(self, frame: object) -> None:
+        if self._stop.is_set():
+            return
+        with self._lock:
+            self._latest = frame
+            self._has.set()
+
+    def _snapshot(self):
+        while not self._stop.is_set():
+            self._has.wait(timeout=0.05)
+            if self._stop.is_set():
+                return None
+            with self._lock:
+                frame = self._latest
+                self._has.clear()
+            if frame is not None:
+                return frame
+        return None
+
+    async def recv(self):
+        if self.readyState != "live":
+            raise MediaStreamError
+        loop = asyncio.get_running_loop()
+        frame = await loop.run_in_executor(None, self._snapshot)
+        if frame is None:
+            raise MediaStreamError
+        now = time.monotonic()
+        if self._origin is None:
+            self._origin = now
+        frame.pts = int((now - self._origin) * _VIDEO_CLOCK)
+        frame.time_base = _VIDEO_TIME_BASE
+        return frame
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._has.set()
+        container = self._container
+        if container is not None:
+            try:
+                container.close()
+            except Exception:
+                pass
+        thread = self._thread
+        self._thread = None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2)
+        super().stop()
+
+
 class DisplayCaptureSource:
     """x11grab del DISPLAY + Pulse monitor. Encode: aiortc (VP8 / Opus)."""
 
@@ -237,31 +425,29 @@ class DisplayCaptureSource:
         self._display = display
         self._draw_mouse = draw_mouse
         self._relay = MediaRelay()
-        self._player: Optional[MediaPlayer] = None
+        self._video: Optional[X11GrabTrack] = None
         self._audio: Optional[PulseAudioTrack] = None
 
     def is_running(self) -> bool:
-        return self._player is not None and self._player.video is not None
+        return self._video is not None and self._video.readyState == "live"
 
     def start(self) -> None:
-        if self._player is not None:
+        if self._video is not None:
             return
         log.info(
-            "encoder=vp8 source=x11grab display=%s %s@%s",
+            "encoder=vp8 source=x11grab display=%s %s@%s lowlat=1",
             self._display,
             CAPTURE_SIZE,
             CAPTURE_FPS,
         )
-        self._player = MediaPlayer(
+        track = X11GrabTrack(
             self._display,
-            format="x11grab",
-            options={
-                "video_size": CAPTURE_SIZE,
-                "framerate": CAPTURE_FPS,
-                "draw_mouse": "1" if self._draw_mouse else "0",
-                "probesize": "32",
-            },
+            size=CAPTURE_SIZE,
+            fps=CAPTURE_FPS,
+            draw_mouse=self._draw_mouse,
         )
+        track.start()
+        self._video = track
 
     def _start_audio(self) -> PulseAudioTrack | None:
         source = os.environ.get("STATION_PULSE_SOURCE", PULSE_SOURCE)
@@ -274,9 +460,9 @@ class DisplayCaptureSource:
             return None
 
     def subscribe_video(self):
-        if self._player is None or self._player.video is None:
+        if self._video is None:
             return None
-        return self._relay.subscribe(self._player.video, buffered=False)
+        return self._relay.subscribe(self._video, buffered=False)
 
     def subscribe_audio(self):
         if self._audio is None:
@@ -288,14 +474,10 @@ class DisplayCaptureSource:
         self._audio = None
         if audio is not None:
             audio.stop()
-        player = self._player
-        self._player = None
-        if player is None:
-            return
-        if player.video:
-            player.video.stop()
-        if player.audio:
-            player.audio.stop()
+        video = self._video
+        self._video = None
+        if video is not None:
+            video.stop()
 
 
 VideoSource = Union[SmpteBarsSource, DisplayCaptureSource]

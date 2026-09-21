@@ -94,7 +94,7 @@ class InputSink:
             return
         pad = self._pads[slot]
         if ev.is_pad_button:
-            log.info(
+            log.debug(
                 "input pad=%s %s code=%s",
                 slot,
                 "down" if ev.pressed else "up",
@@ -102,13 +102,13 @@ class InputSink:
             )
             pad.button(ev.control, 1 if ev.pressed else 0)
             return
-        log.info("input pad=%s axis code=%s extra=%s", slot, ev.control, ev.extra)
+        log.debug("input pad=%s axis code=%s extra=%s", slot, ev.control, ev.extra)
         pad.axis(ev.control, ev.extra)
 
     def _key(self, ev: InputEvent) -> None:
         if not self._keyboard:
             return
-        log.info("input key %s code=%s", "down" if ev.pressed else "up", ev.control)
+        log.debug("input key %s code=%s", "down" if ev.pressed else "up", ev.control)
         if self._x11 is None:
             return
         self._x11.key(ev.control, ev.pressed)
@@ -117,7 +117,7 @@ class InputSink:
         if not self._mouse or self._x11 is None:
             return
         if ev.is_pointer_button:
-            log.info(
+            log.debug(
                 "input mouse %s button=%s",
                 "down" if ev.pressed else "up",
                 ev.control,

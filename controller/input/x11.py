@@ -59,7 +59,7 @@ class X11Injector:
                 return
             kind = X.KeyPress if pressed else X.KeyRelease
             dpy.xtest_fake_input(kind, xcode)
-            dpy.sync()
+            dpy.flush()
 
     def button(self, dom_button: int, pressed: bool) -> None:
         xbtn = _dom_to_x_button(dom_button)
@@ -71,7 +71,7 @@ class X11Injector:
                 return
             kind = X.ButtonPress if pressed else X.ButtonRelease
             dpy.xtest_fake_input(kind, xbtn)
-            dpy.sync()
+            dpy.flush()
 
     def move_rel(self, dx: int, dy: int) -> None:
         if dx == 0 and dy == 0:
@@ -82,7 +82,7 @@ class X11Injector:
                 return
             # detail=1 → motion relativo (XTestFakeRelativeMotionEvent)
             dpy.xtest_fake_input(X.MotionNotify, 1, x=dx, y=dy)
-            dpy.sync()
+            dpy.flush()
 
     def move_abs(self, x: int, y: int) -> None:
         x = max(0, min(self._width - 1, x))
@@ -92,7 +92,7 @@ class X11Injector:
             if dpy is None or X is None:
                 return
             dpy.xtest_fake_input(X.MotionNotify, 0, x=x, y=y)
-            dpy.sync()
+            dpy.flush()
 
     def wheel(self, ticks: int) -> None:
         if ticks == 0:
@@ -106,7 +106,7 @@ class X11Injector:
             for _ in range(n):
                 dpy.xtest_fake_input(X.ButtonPress, xbtn)
                 dpy.xtest_fake_input(X.ButtonRelease, xbtn)
-            dpy.sync()
+            dpy.flush()
 
     def _conn(self) -> Optional[Any]:
         if self._failed or Display is None:
