@@ -19,6 +19,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from controller.input import InputSink
 from controller.runtime import GameRuntime
+from controller.webrtc.encode import apply as apply_encoder, codec_name, prefer_h264
 from controller.webrtc.ice import (
     candidate_from_message,
     candidate_to_message,
@@ -39,18 +40,18 @@ from controller.webrtc.signaling import (
 log = logging.getLogger("game-station.webrtc")
 
 
-def _prefer_vp8(pc: RTCPeerConnection) -> None:
-    vp8 = [
-        codec
-        for codec in RTCRtpSender.getCapabilities("video").codecs
-        if codec.mimeType.lower() == "video/vp8"
-    ]
-    if not vp8:
+def _prefer_video(pc: RTCPeerConnection) -> None:
+    caps = RTCRtpSender.getCapabilities("video")
+    h264 = [c for c in caps.codecs if c.mimeType.lower() == "video/h264"]
+    vp8 = [c for c in caps.codecs if c.mimeType.lower() == "video/vp8"]
+    rtx = [c for c in caps.codecs if c.mimeType.lower() == "video/rtx"]
+    prefer = (h264 + vp8 + rtx) if prefer_h264() else (vp8 + rtx)
+    if not prefer:
         return
     for transceiver in pc.getTransceivers():
         sender = transceiver.sender
         if sender and sender.track and sender.track.kind == "video":
-            transceiver.setCodecPreferences(vp8)
+            transceiver.setCodecPreferences(prefer)
 
 
 def _prefer_opus(pc: RTCPeerConnection) -> None:
@@ -82,19 +83,22 @@ class WebrtcSession:
         self._input = input_sink or InputSink()
         self._pc: Optional[RTCPeerConnection] = None
         self._ws: Optional[WebSocket] = None
+        apply_encoder()
 
     def playing_source(self) -> bool:
         return self._source.is_running()
 
     def encoder_name(self) -> Optional[str]:
-        return "vp8" if self.playing_source() else None
+        if not self.playing_source():
+            return None
+        return codec_name()
 
     def last_input_monotonic(self) -> Optional[float]:
         return self._input.last_input_monotonic
 
     async def start_source(self, game_id: str) -> None:
         self._source.stop()
-        log.info("start_source game=%s encoder=vp8,opus", game_id)
+        log.info("start_source game=%s encoder=%s,opus", game_id, codec_name())
         manifest = self._runtime.manifest_for(game_id)
         needs = manifest.needs
         log.info(
@@ -229,10 +233,10 @@ class WebrtcSession:
         audio = self._source.subscribe_audio()
         if audio is not None:
             pc.addTrack(audio)
-            log.info("webrtc audio track=opus encoder=vp8,opus")
+            log.info("webrtc audio track=opus encoder=%s,opus", codec_name())
         else:
-            log.info("webrtc audio track=none encoder=vp8")
-        _prefer_vp8(pc)
+            log.info("webrtc audio track=none encoder=%s", codec_name())
+        _prefer_video(pc)
         _prefer_opus(pc)
 
     async def _release_peer(self, pc: RTCPeerConnection) -> None:

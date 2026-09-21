@@ -319,7 +319,7 @@ class Station:
             "state=%s sessionId=%s encoder=%s",
             self.state.value,
             session_id,
-            self._stream.encoder_name() or "vp8",
+            self._stream.encoder_name() or "h264",
         )
         self._idle_task = asyncio.create_task(self._idle_watch())
         body: dict[str, Any] = {

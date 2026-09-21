@@ -57,7 +57,7 @@ class Settings:
             http_port=int(os.environ.get("STATION_HTTP_PORT", "8090")),
             display=os.environ.get("STATION_DISPLAY", ":99"),
             size=size,
-            fps=os.environ.get("STATION_FPS", "30"),
+            fps=os.environ.get("STATION_FPS", "60"),
             library_root=os.environ.get("LIBRARY_ROOT", "/opt/station-library"),
             cache_root=os.environ.get("CACHE_ROOT", "/cache"),
             idle_timeout_s=float(os.environ.get("IDLE_TIMEOUT_S", "300")),
@@ -80,7 +80,7 @@ class Settings:
 
 
 def interpolate(value: str, settings: Settings) -> str:
-    """Sustituye `${WIDTH}` `${HEIGHT}` `${SIZE}` `${CACHE}` `${LIBRARY}` `${DISPLAY}`."""
+    """Sustituye `${WIDTH}` `${HEIGHT}` `${SIZE}` `${CACHE}` `${LIBRARY}` `${DISPLAY}` `${FPS}`."""
     return (
         value.replace("${WIDTH}", settings.width)
         .replace("${HEIGHT}", settings.height)
@@ -88,4 +88,5 @@ def interpolate(value: str, settings: Settings) -> str:
         .replace("${CACHE}", settings.cache_root)
         .replace("${LIBRARY}", settings.library_root)
         .replace("${DISPLAY}", settings.display)
+        .replace("${FPS}", settings.fps)
     )

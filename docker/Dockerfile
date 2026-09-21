@@ -33,14 +33,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements.txt .
+COPY docker/install-ffmpeg-nvenc.sh /tmp/install-ffmpeg-nvenc.sh
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
+        g++ \
+        make \
+        nasm \
+        pkg-config \
         python3-dev \
         linux-libc-dev \
-    && pip3 install --no-cache-dir --break-system-packages -r requirements.txt \
-    && apt-get purge -y gcc python3-dev \
+        libx264-dev \
+        libxcb1-dev \
+        libxcb-shm0-dev \
+        libxcb-xfixes0-dev \
+        libx11-dev \
+        libxext-dev \
+    && chmod +x /tmp/install-ffmpeg-nvenc.sh \
+    && (/tmp/install-ffmpeg-nvenc.sh || echo "ffmpeg nvenc: compile skipped") \
+    && pip3 install --no-cache-dir --break-system-packages cython pkgconfig \
+    && (PKG_CONFIG_PATH=/usr/local/lib/pkgconfig LDFLAGS="-L/usr/local/lib" \
+        pip3 install --no-cache-dir --break-system-packages --no-binary av -r requirements.txt \
+        || pip3 install --no-cache-dir --break-system-packages -r requirements.txt) \
+    && apt-get purge -y gcc g++ make nasm python3-dev \
     && apt-get autoremove -y --purge \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/install-ffmpeg-nvenc.sh
 
 COPY controller ./controller
 COPY docker/entrypoint.sh /usr/local/bin/station-entrypoint
@@ -61,7 +77,10 @@ ENV HOME=/root
 ENV XDG_CONFIG_HOME=/root/.config
 ENV STATION_DISPLAY=:99
 ENV STATION_SIZE=1280x720
+ENV STATION_FPS=60
+ENV STATION_VIDEO_BITRATE=8000000
 ENV STATION_HTTP_PORT=8090
+ENV LD_LIBRARY_PATH=/usr/local/lib
 ENV PULSE_SERVER=unix:/tmp/pulse/native
 ENV PULSE_SINK=game
 ENV STATION_PULSE_SINK=game

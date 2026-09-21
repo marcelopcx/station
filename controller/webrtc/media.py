@@ -3,8 +3,8 @@
     SmpteBarsSource         lavfi smptebars (fallback / tests)
     DisplayCaptureSource    x11grab + Pulse monitor
 
-El encode (VP8 / Opus) lo hace aiortc en el `RTCRtpSender`, no estas clases.
-La elección display vs SMPTE la hace el manifiesto (`needs.display`), no un gameId.
+El encode (H.264 NVENC / libx264, fallback VP8) lo hace aiortc en el
+`RTCRtpSender`. La elección display vs SMPTE la hace el manifiesto.
 """
 
 from __future__ import annotations
@@ -27,11 +27,15 @@ from aiortc.contrib.media import MediaPlayer, MediaRelay
 from aiortc.mediastreams import MediaStreamError
 from av import AudioFrame
 
+from controller.webrtc.encode import apply as apply_encoder, codec_name
+
 log = logging.getLogger("game-station.webrtc.media")
 
-SMPTE_LAVFI = "smptebars=size=1280x720:rate=30"
+apply_encoder()
+
+SMPTE_LAVFI = "smptebars=size=1280x720:rate=60"
 CAPTURE_SIZE = os.environ.get("STATION_SIZE", "1280x720")
-CAPTURE_FPS = os.environ.get("STATION_FPS", "30")
+CAPTURE_FPS = os.environ.get("STATION_FPS", "60")
 PULSE_SOURCE = os.environ.get("STATION_PULSE_SOURCE", "game.monitor")
 
 _AUDIO_RATE = 48000
@@ -50,38 +54,6 @@ _X11GRAB_OPTIONS = {
     "thread_queue_size": "1",
     "use_wallclock_as_timestamps": "1",
 }
-
-
-def _tune_vp8_encoder() -> None:
-    """libvpx: menos denoise y más speed. El codec de aiortc ya es realtime."""
-    try:
-        from aiortc.codecs.vpx import Vp8Encoder
-    except ImportError:
-        return
-    if getattr(Vp8Encoder, "_airtek_tuned", False):
-        return
-
-    orig = Vp8Encoder.encode
-
-    def encode(self, frame, force_keyframe=False):  # type: ignore[no-untyped-def]
-        payloads, timestamp = orig(self, frame, force_keyframe)
-        codec = getattr(self, "codec", None)
-        if codec is not None and not getattr(self, "_airtek_opts", False):
-            try:
-                opts = dict(codec.options)
-                opts["cpu-used"] = "8"
-                opts["noise-sensitivity"] = "0"
-                codec.options = opts
-            except Exception:
-                pass
-            self._airtek_opts = True
-        return payloads, timestamp
-
-    Vp8Encoder.encode = encode  # type: ignore[method-assign]
-    Vp8Encoder._airtek_tuned = True  # type: ignore[attr-defined]
-
-
-_tune_vp8_encoder()
 
 
 class PulseAudioTrack(AudioStreamTrack):
@@ -252,7 +224,7 @@ class SmpteBarsSource:
     def start(self) -> None:
         if self._player is not None:
             return
-        log.info("encoder=vp8 source=smptebars 1280x720@30")
+        log.info("encoder=%s source=smptebars 1280x720@%s", codec_name(), CAPTURE_FPS)
         self._player = MediaPlayer(SMPTE_LAVFI, format="lavfi")
 
     def subscribe_video(self):
@@ -419,7 +391,7 @@ class X11GrabTrack(VideoStreamTrack):
 
 
 class DisplayCaptureSource:
-    """x11grab del DISPLAY + Pulse monitor. Encode: aiortc (VP8 / Opus)."""
+    """x11grab del DISPLAY + Pulse monitor. Encode: H.264 (NVENC/x264) o VP8."""
 
     def __init__(self, display: str = ":99", draw_mouse: bool = False) -> None:
         self._display = display
@@ -435,7 +407,8 @@ class DisplayCaptureSource:
         if self._video is not None:
             return
         log.info(
-            "encoder=vp8 source=x11grab display=%s %s@%s lowlat=1",
+            "encoder=%s source=x11grab display=%s %s@%s",
+            codec_name(),
             self._display,
             CAPTURE_SIZE,
             CAPTURE_FPS,

@@ -86,6 +86,10 @@ class GameRuntime:
         env = os.environ.copy()
         env["DISPLAY"] = self._settings.display
         env.setdefault("NVIDIA_DRIVER_CAPABILITIES", "all")
+        env.setdefault("vblank_mode", "0")
+        env.setdefault("__GL_SYNC_TO_VBLANK", "0")
+        env.setdefault("SDL_HINT_RENDER_VSYNC", "0")
+        env.setdefault("SDL_RENDER_VSYNC", "0")
         self._pulse.apply_env(env)
         env.update(manifest.interpolated_env(self._settings))
         if manifest.needs.gamepad:
